@@ -1,0 +1,72 @@
+name: pocketbook
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: "Your budget, spending and money alerts in Hermes: Plaid-synced accounts, proposed budgets, charts, a Finance tab, and alerts for unusual charges"
+author: Maanav Merwaha
+license: MIT
+homepage: https://github.com/maanavmerwaha/pocketbook
+tags: [finance, budget, plaid, alerts]
+requires_hermes: ">=0.23.0"
+provides_tools:
+  - money_overview
+  - money_transactions
+  - money_spending
+  - money_budgets
+  - money_recurring
+  - money_alerts
+  - money_chart
+  - money_accounts
+  - money_categorize
+provides_hooks: []
+config_schema:
+  plaid_client_id:
+    type: secret
+    env: POCKETBOOK_PLAID_CLIENT_ID
+    label: Plaid client ID
+    description: From dashboard.plaid.com → Developers → Keys
+  plaid_secret:
+    type: secret
+    env: POCKETBOOK_PLAID_SECRET
+    label: Plaid secret
+    description: The secret for the environment chosen below
+  plaid_env:
+    type: str
+    choices: [sandbox, production]
+    default: sandbox
+    label: Plaid environment
+    description: Sandbox uses Plaid's test banks. Production connects your real accounts.
+  sync_minutes:
+    type: int
+    default: 30
+    label: Minimum minutes between syncs
+  large_purchase_dollars:
+    type: int
+    default: 500
+    label: Large purchase alert (dollars)
+    description: Any single charge at or above this amount. 0 turns it off.
+  alert_budget:
+    type: bool
+    default: true
+    label: Alert when a budget is over or on pace to go over
+  alert_large:
+    type: bool
+    default: true
+    label: Alert on large purchases
+  alert_unusual:
+    type: bool
+    default: true
+    label: Alert on unusual charges, double charges and new merchants
+  alert_subscriptions:
+    type: bool
+    default: true
+    label: Alert when a subscription price goes up
+  alert_bills:
+    type: bool
+    default: true
+    label: Alert when a bill is due within three days
+  quiet_hours:
+    type: str
+    default: "22:00-08:00"
+    label: Quiet hours
+    description: Alerts found in this window wait until it ends. Leave empty to turn off.

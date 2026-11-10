@@ -1,0 +1,267 @@
+"""Agent tools. Each returns JSON; amounts come back in dollars so the model never converts cents."""
+
+from __future__ import annotations
+
+import json
+from datetime import date
+
+from . import alerts, insights, service
+from .plaid import PlaidError
+from .store import connect, dollars, today
+
+_cron_check = lambda: None  # replaced in register(): returns a CronExecution inside scheduled runs
+
+
+def _ok(**data) -> str:
+    return json.dumps(_d(data), default=str)
+
+
+def _err(msg: str) -> str:
+    return json.dumps({"error": msg})
+
+
+def _d(obj):
+    """Turn every *_cents field into dollars, recursively."""
+    if isinstance(obj, dict):
+        return {(k[:-6] if k.endswith("_cents") else k): (dollars(v) if k.endswith("_cents") else _d(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_d(x) for x in obj]
+    return obj
+
+
+def _no_cron(action: str):
+    if _cron_check() is not None:
+        return _err(f"{action} is not allowed in scheduled runs. Ask the user in a live chat.")
+    return None
+
+
+def _safe(fn):
+    def handler(args, **kwargs):
+        try:
+            return fn(args or {})
+        except PlaidError as e:
+            return _err(f"Plaid: {e}")
+        except Exception as e:  # tool errors go back to the model as text, never as a crash
+            return _err(f"{type(e).__name__}: {e}")
+    handler.__name__ = fn.__name__
+    return handler
+
+
+def _range(args) -> tuple[date, date]:
+    t = today()
+    if args.get("month"):
+        return insights.month_range(args["month"])
+    start = date.fromisoformat(args["start"]) if args.get("start") else t.replace(day=1)
+    end = date.fromisoformat(args["end"]) if args.get("end") else t
+    return start, end
+
+
+# ---------- handlers ----------
+
+@_safe
+def overview(args):
+    conn = connect()
+    return _ok(**insights.overview(conn, today()), note="Amounts in USD. Spending excludes transfers, card payments and income.")
+
+
+@_safe
+def transactions(args):
+    conn = connect()
+    rows = insights.find_transactions(
+        conn, query=args.get("query"), merchant=args.get("merchant"),
+        category=insights.category_key(args["category"]) if args.get("category") else None,
+        start=args.get("start"), end=args.get("end"),
+        min_cents=int(float(args["min_amount"]) * 100) if args.get("min_amount") else None,
+        ids=args.get("ids"), limit=min(int(args.get("limit") or 25), 200))
+    return _ok(transactions=rows, count=len(rows),
+               note="Positive amounts are money out; negative are refunds or deposits.")
+
+
+@_safe
+def spending(args):
+    conn = connect()
+    start, end = _range(args)
+    group = args.get("group_by", "category")
+    if group == "merchant":
+        rows = insights.spending_by_merchant(conn, start, end, int(args.get("limit") or 15))
+    elif group == "month":
+        rows = insights.monthly_totals(conn, today(), int(args.get("months") or 6))
+    else:
+        rows = insights.spending_by_category(conn, start, end)
+    return _ok(start=start, end=end, group_by=group, rows=rows,
+               total_cents=insights.total_spend(conn, start, end))
+
+
+@_safe
+def budgets(args):
+    conn = connect()
+    action = args.get("action", "status")
+    if action == "propose":
+        props = insights.propose_budgets(conn, today())
+        return _ok(proposed=props, next="Show these to the user and ask which to approve or adjust.")
+    if action in ("approve", "set", "remove"):
+        blocked = _no_cron(f"budgets {action}")
+        if blocked:
+            return blocked
+    if action == "approve":
+        cats = [insights.category_key(c) for c in args.get("categories") or []] or None
+        return _ok(approved=[insights.label(c) for c in insights.approve_budgets(conn, cats)],
+                   status=insights.budget_status(conn, today()))
+    if action == "set":
+        cat = insights.category_key(args["category"])
+        insights.set_budget(conn, cat, int(float(args["amount"]) * 100))
+        return _ok(set=insights.label(cat), status=insights.budget_status(conn, today()))
+    if action == "remove":
+        cat = insights.category_key(args["category"])
+        insights.set_budget(conn, cat, None)
+        return _ok(removed=insights.label(cat))
+    return _ok(**insights.budget_status(conn, today(), args.get("month")))
+
+
+@_safe
+def recurring(args):
+    conn = connect()
+    rows = insights.recurring(conn, today())
+    return _ok(recurring=rows, monthly_total_cents=sum(r["monthly_cents"] for r in rows))
+
+
+@_safe
+def alerts_tool(args):
+    conn = connect()
+    action = args.get("action", "check")
+    if action == "check":
+        return _ok(**service.check(conn))
+    if action == "dismiss":
+        return _ok(dismissed=alerts.dismiss(conn, args.get("keys")))
+    return _ok(alerts=alerts.listing(conn, bool(args.get("include_dismissed"))), settings={
+        k: v for k, v in service.settings().items() if k in alerts.DEFAULTS})
+
+
+@_safe
+def chart(args):
+    path = service.chart(args.get("kind", "spending"), args.get("month"), args.get("merchant"))
+    return _ok(path=str(path), note="Include this absolute path on its own line in your reply so the chart attaches.")
+
+
+@_safe
+def accounts(args):
+    conn = connect()
+    action = args.get("action", "list")
+    if action == "sync":
+        return _ok(**service.sync(conn, force=True))
+    if action in ("connect", "finish", "test_bank", "disconnect"):
+        blocked = _no_cron(f"accounts {action}")
+        if blocked:
+            return blocked
+    p = service.plaid()
+    if action == "connect":
+        link = p.start_link(conn)
+        return _ok(**link, next="Send the user this link. When they finish, call money_accounts with action=finish.")
+    if action == "finish":
+        added = p.finish_link(conn)
+        return _ok(added=added, sync=service.sync(conn, force=True))
+    if action == "test_bank":
+        added = p.sandbox_link(conn)
+        return _ok(added=added, sync=service.sync(conn, force=True))
+    if action == "disconnect":
+        p.remove_item(conn, args["item_id"])
+        return _ok(disconnected=args["item_id"])
+    items = [dict(r) for r in conn.execute("SELECT item_id, institution, status, error, last_sync FROM items")]
+    return _ok(connections=items, accounts=[
+        {k: a[k] for k in ("account_id", "item_id", "name", "mask", "type", "subtype", "current_cents",
+                           "available_cents", "limit_cents", "institution", "last_sync")}
+        for a in insights.accounts(conn)], plaid_configured=p.configured, plaid_env=p.env)
+
+
+@_safe
+def categorize(args):
+    blocked = _no_cron("recategorize")
+    if blocked:
+        return blocked
+    conn = connect()
+    cat = insights.category_key(args["category"])
+    n = insights.recategorize(conn, args["transaction_id"], cat, bool(args.get("all_from_merchant")))
+    return _ok(updated=n, category=insights.label(cat))
+
+
+# ---------- schemas ----------
+
+CATEGORIES = ", ".join(v for k, v in insights.LABELS.items())
+DATE = {"type": "string", "description": "YYYY-MM-DD"}
+
+TOOLS = [
+    ("money_overview", overview, "📊",
+     "The user's money right now: this month's spending vs the same point last month, budget totals and "
+     "categories at risk, top categories, cash and card balances, bills due in 14 days, open alerts, last sync. "
+     "Call this first for 'how am I doing', 'what's my budget', or any broad money question.", {}),
+    ("money_transactions", transactions, "🧾",
+     "Search transactions. Use to show the charges behind a number, find a purchase, or explain an alert "
+     "(pass the alert's txn_ids as ids).",
+     {"query": {"type": "string", "description": "Text in the merchant or description"},
+      "merchant": {"type": "string"}, "category": {"type": "string", "description": f"One of: {CATEGORIES}"},
+      "start": DATE, "end": DATE, "min_amount": {"type": "number", "description": "Dollars"},
+      "ids": {"type": "array", "items": {"type": "string"}},
+      "limit": {"type": "integer", "description": "Default 25, max 200"}}),
+    ("money_spending", spending, "💸",
+     "Spending totals grouped by category, merchant or month for a period. Defaults to this month so far.",
+     {"group_by": {"type": "string", "enum": ["category", "merchant", "month"]},
+      "month": {"type": "string", "description": "YYYY-MM; overrides start/end"},
+      "start": DATE, "end": DATE, "months": {"type": "integer", "description": "For group_by=month"},
+      "limit": {"type": "integer"}}),
+    ("money_budgets", budgets, "🎯",
+     "Monthly budgets by category. status: spent vs budget with month-end projection. propose: suggest budgets "
+     "from the last three months of spending (show them, then ask before approving). approve: activate proposals "
+     "(all, or the listed categories) only after the user agrees. set/remove: change one budget the user named.",
+     {"action": {"type": "string", "enum": ["status", "propose", "approve", "set", "remove"]},
+      "category": {"type": "string"}, "amount": {"type": "number", "description": "Dollars per month"},
+      "categories": {"type": "array", "items": {"type": "string"}},
+      "month": {"type": "string", "description": "YYYY-MM for status"}}),
+    ("money_recurring", recurring, "🔁",
+     "Subscriptions and bills detected from charge history: cadence, last and previous amount, next expected date.",
+     {}),
+    ("money_alerts", alerts_tool, "🔔",
+     "check: sync if due, then return alerts not yet sent (large or unusual charges, double charges, new merchants, "
+     "price increases, bills due soon, budgets over or on pace to go over, broken bank connections). Each alert is "
+     "sent once. list: recent alerts and alert settings. dismiss: clear alerts by key, or all.",
+     {"action": {"type": "string", "enum": ["check", "list", "dismiss"]},
+      "keys": {"type": "array", "items": {"type": "string"}},
+      "include_dismissed": {"type": "boolean"}}),
+    ("money_chart", chart, "📈",
+     "Draw a PNG chart. spending: this month by category with budget marks. trend: monthly totals with income. "
+     "pace: this month's running total vs last month and budget. merchant: monthly spend at one merchant.",
+     {"kind": {"type": "string", "enum": ["spending", "trend", "pace", "merchant"]},
+      "month": {"type": "string", "description": "YYYY-MM for spending"},
+      "merchant": {"type": "string"}}),
+    ("money_accounts", accounts, "🏦",
+     "Bank connections through the user's own Plaid keys. list: accounts and balances. sync: pull new transactions now. "
+     "connect: get a Plaid sign-in link for the user to open. finish: complete it after they sign in. "
+     "test_bank: add a Plaid sandbox bank (sandbox keys only). disconnect: remove a connection and its data.",
+     {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect"]},
+      "item_id": {"type": "string"}}),
+    ("money_categorize", categorize, "🏷️",
+     "Change a transaction's category when the user says it is wrong; optionally every charge from that merchant.",
+     {"transaction_id": {"type": "string"}, "category": {"type": "string", "description": f"One of: {CATEGORIES}"},
+      "all_from_merchant": {"type": "boolean"}}),
+]
+
+REQUIRED = {"money_categorize": ["transaction_id", "category"]}
+
+
+def schema(name, description, props):
+    return {"name": name, "description": description,
+            "parameters": {"type": "object", "properties": props, "required": REQUIRED.get(name, [])}}
+
+
+def money_command(raw_args: str = "", **kwargs) -> str:
+    try:
+        arg = (raw_args or "").strip().lower()
+        if arg == "check":
+            res = service.check()
+            if not res["alerts"]:
+                return "Nothing new." + (f" {res['held']} held for quiet hours." if res.get("held") else "")
+            return "\n".join(f"• {a['title']}: {a['detail']}" for a in res["alerts"])
+        return service.summary_text()
+    except Exception as e:
+        return f"pocketbook: {e}"
+

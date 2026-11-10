@@ -1,0 +1,182 @@
+"""HTTP API for the Finance tab (Desktop and web dashboard). Mounted at /api/plugins/pocketbook/."""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import sys
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+
+def _package():
+    """Hermes loads this file on its own, so import the plugin package from the folder above."""
+    name = "pocketbook_dashboard_pkg"
+    if name not in sys.modules:
+        root = Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(name, root / "__init__.py",
+                                                      submodule_search_locations=[str(root)])
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    return name
+
+
+_PKG = _package()
+alerts = importlib.import_module(f"{_PKG}.alerts")
+demo = importlib.import_module(f"{_PKG}.demo")
+insights = importlib.import_module(f"{_PKG}.insights")
+service = importlib.import_module(f"{_PKG}.service")
+store = importlib.import_module(f"{_PKG}.store")
+PlaidError = importlib.import_module(f"{_PKG}.plaid").PlaidError
+
+router = APIRouter()
+
+
+async def _run(fn, *args):
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except PlaidError as e:
+        raise HTTPException(400, str(e)) from None
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, str(e)) from None
+
+
+def _summary():
+    conn = store.connect()
+    t = store.today()
+    s = service.settings()
+    p = service.plaid(s)
+    return {
+        "overview": insights.overview(conn, t),
+        "budgets": insights.budget_status(conn, t),
+        "months": insights.monthly_totals(conn, t, 6),
+        "pace": _pace(conn, t),
+        "recurring": insights.recurring(conn, t),
+        "alerts": alerts.listing(conn, limit=20),
+        "accounts": insights.accounts(conn),
+        "recent": insights.find_transactions(conn, limit=12),
+        "setup": {"plaid_configured": p.configured, "plaid_env": p.env,
+                  "linking": bool(store.get_meta(conn, "pending_link_token")),
+                  "live_items": service.has_live_items(conn)},
+    }
+
+
+def _pace(conn, t):
+    month = insights.month_of(t)
+    start, end = insights.month_range(month)
+    pstart, pend = insights.month_range(insights.shift_month(month, -1))
+
+    def daily(s, e):
+        rows = conn.execute(
+            f"SELECT t.date, SUM(t.amount_cents) {insights.FROM_SQL} WHERE {insights.SPEND_SQL}"
+            " AND t.date BETWEEN ? AND ? GROUP BY t.date", (s.isoformat(), e.isoformat())).fetchall()
+        by_day = {int(r[0][8:]): r[1] for r in rows}
+        run, out = 0, []
+        for d in range(1, e.day + 1):
+            run += by_day.get(d, 0)
+            out.append(run)
+        return out
+
+    return {"days": end.day, "today": t.day, "current": daily(start, end)[: t.day], "previous": daily(pstart, pend)}
+
+
+@router.get("/summary")
+async def summary():
+    return await _run(_summary)
+
+
+@router.get("/transactions")
+async def transactions(query: str = "", category: str = "", start: str = "", end: str = "",
+                       ids: str = "", limit: int = 100):
+    def go():
+        return insights.find_transactions(
+            store.connect(), query=query or None, category=category or None, start=start or None,
+            end=end or None, ids=[i for i in ids.split(",") if i] or None, limit=min(limit, 500))
+    return {"transactions": await _run(go)}
+
+
+class BudgetBody(BaseModel):
+    category: str | None = None
+    amount: float | None = None
+    categories: list[str] | None = None
+
+
+@router.post("/budgets/propose")
+async def propose():
+    return {"proposed": await _run(lambda: insights.propose_budgets(store.connect(), store.today()))}
+
+
+@router.post("/budgets/approve")
+async def approve(body: BudgetBody):
+    return {"approved": await _run(lambda: insights.approve_budgets(store.connect(), body.categories))}
+
+
+@router.post("/budgets/set")
+async def set_budget(body: BudgetBody):
+    if not body.category:
+        raise HTTPException(400, "category required")
+    cents = int(round(body.amount * 100)) if body.amount else None
+    await _run(insights.set_budget, store.connect(), body.category, cents)
+    return {"ok": True}
+
+
+class KeysBody(BaseModel):
+    keys: list[str] | None = None
+
+
+@router.post("/alerts/dismiss")
+async def dismiss(body: KeysBody):
+    return {"dismissed": await _run(alerts.dismiss, store.connect(), body.keys)}
+
+
+@router.post("/sync")
+async def sync():
+    def go():
+        conn = store.connect()
+        result = service.sync(conn, force=True)
+        alerts.record(conn, alerts.detect(conn, store.today(), service.settings()))
+        return result
+    return await _run(go)
+
+
+@router.post("/connect")
+async def connect_bank():
+    return await _run(lambda: service.plaid().start_link(store.connect()))
+
+
+@router.post("/connect/finish")
+async def finish_bank():
+    def go():
+        conn = store.connect()
+        added = service.plaid().finish_link(conn)
+        return {"added": added, "sync": service.sync(conn, force=True)}
+    return await _run(go)
+
+
+@router.post("/test-bank")
+async def test_bank():
+    def go():
+        conn = store.connect()
+        added = service.plaid().sandbox_link(conn)
+        return {"added": added, "sync": service.sync(conn, force=True)}
+    return await _run(go)
+
+
+class DemoBody(BaseModel):
+    action: str = "load"
+
+
+@router.post("/demo")
+async def sample_data(body: DemoBody):
+    def go():
+        conn = store.connect()
+        if body.action == "clear":
+            demo.clear(conn)
+            return {"cleared": True}
+        info = demo.load(conn, store.today())
+        insights.propose_budgets(conn, store.today())
+        return info
+    return await _run(go)
