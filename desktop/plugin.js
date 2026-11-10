@@ -859,8 +859,8 @@ function Setup ({ setup, act, busy }) {
   const ready = setup.plaid_configured
   return h(Card, { title: 'Connect your accounts', sub: 'Pocketbook reads balances and transactions through Plaid with your own keys.' },
     h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '4px 0 18px' } },
-      h('div', { className: 'pb-step' }, h('b', null, '1'), h('div', null, 'Create free Plaid keys at dashboard.plaid.com, under Developers, Keys.')),
-      h('div', { className: 'pb-step' }, h('b', null, '2'), h('div', null, 'Paste them in Settings, Plugins, pocketbook. ',
+      h('div', { className: 'pb-step' }, h('b', null, '1'), h('div', null, 'For real banks, request Production access in the Plaid Dashboard and complete its approval steps. Sandbox keys only connect simulated banks.')),
+      h('div', { className: 'pb-step' }, h('b', null, '2'), h('div', null, 'Enter your client ID and Production secret in Settings, Plugins, pocketbook, and select production. For test banks, use sandbox credentials and sandbox. ',
         h(Chip, { tone: ready ? 'good' : 'neutral' }, ready ? `Keys found (${setup.plaid_env})` : 'No keys yet'))),
       h('div', { className: 'pb-step' }, h('b', null, '3'), h('div', null, 'Connect a bank. Pocketbook syncs two years of history and Hermes proposes budgets from it.'))),
     h('div', { className: 'pb-flex pb-wrap' },

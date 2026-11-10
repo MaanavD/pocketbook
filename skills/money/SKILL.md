@@ -51,7 +51,13 @@ Bank data shows "Amazon $62.22" and nothing more. `money_purchases` holds the it
 
 ## Connecting a bank
 
-The user brings their own Plaid keys (Settings → Plugins → pocketbook). `money_accounts action=connect` returns a link; send it, then call `action=finish` after they sign in. With sandbox keys, `action=test_bank` adds Plaid's test bank. Never ask the user to paste keys or passwords into chat. If sample data is loaded, connecting and importing are refused until the user removes it (`hermes pocketbook demo --clear` or the Finance tab).
+Before connecting, call `money_accounts` to check `plaid_env` and `plaid_configured`. For real banks, the user must first request Production access in the Plaid Dashboard (https://dashboard.plaid.com/overview/production), complete Plaid's approval steps, and obtain a Production secret under Developers → Keys. Having Sandbox keys does not grant Production access. An eligible Trial plan may provide production access; do not promise approval or a fixed plan limit.
+
+The user enters their client ID and Production secret in Settings → Plugins → pocketbook and selects `production` for the active Hermes profile and gateway. With SSH, configure the remote backend. Never ask for keys or bank passwords in chat, and never switch environments or replace credentials without the user's instruction.
+
+If `plaid_env` is `sandbox`, explain that all bank links are simulated, including First Platypus Bank. Do not send a sandbox link as a way to connect a real bank. `action=test_bank` only adds a test bank. Recommend separate Hermes profiles for sandbox and production: switching the setting does not migrate test connections or tokens.
+
+Once the intended environment is configured, `money_accounts action=connect` returns a fresh link; send it, then call `action=finish` after the user signs in. If sample data is loaded, connecting and importing are refused until the user removes it (`hermes pocketbook demo --clear` or the Finance tab).
 
 ## Style
 
