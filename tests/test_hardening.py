@@ -342,3 +342,58 @@ def test_clear_samples_preserves_user_budget():
     insights.set_budget(c, "TRAVEL", 50000)
     demo.clear(c)
     assert c.execute("SELECT amount_cents FROM budgets WHERE category = ?", ("TRAVEL",)).fetchone()[0] == 50000
+
+
+def test_full_refresh_includes_loans_missing_from_transaction_accounts():
+    loan = {"account_id": "loan", "name": "Loan", "type": "loan", "balances": {"current": 2345.67}}
+    c, p = linked({
+        "/transactions/sync": {"accounts": ACCT, "added": [], "modified": [], "removed": [],
+                               "has_more": False, "next_cursor": "latest"},
+        "/accounts/get": {"accounts": [*ACCT, loan]},
+    })
+    result = p.sync(c, full=True)
+    assert result["errors"] == []
+    assert c.execute("SELECT current_cents FROM accounts WHERE account_id = ?", ("loan",)).fetchone()[0] == 234567
+    assert c.execute("SELECT liabilities_cents FROM networth ORDER BY date DESC LIMIT 1").fetchone()[0] == 244567
+
+
+def test_full_refresh_clears_empty_holdings_only_for_the_refreshed_bank():
+    invest = {"account_id": "invest", "name": "Brokerage", "type": "investment", "balances": {"current": 0}}
+    c, p = linked({
+        "/transactions/sync": {"accounts": ACCT, "added": [], "modified": [], "removed": [],
+                               "has_more": False, "next_cursor": "latest"},
+        "/accounts/get": {"accounts": [invest]},
+        "/investments/holdings/get": {"holdings": [], "securities": []},
+    })
+    wealth.save_holdings(c, [
+        {"account_id": "invest", "security_id": "s1", "quantity": 1, "institution_value": 50},
+        {"account_id": "other-bank", "security_id": "s2", "quantity": 1, "institution_value": 75}], [])
+    assert p.sync(c, full=True)["errors"] == []
+    assert [r[0] for r in c.execute("SELECT account_id FROM holdings")] == ["other-bank"]
+
+
+def test_manual_refresh_bypasses_interval_and_requests_all_accounts(monkeypatch):
+    c, p = linked({
+        "/transactions/sync": {"accounts": ACCT, "added": [], "modified": [], "removed": [],
+                               "has_more": False, "next_cursor": "latest"},
+        "/accounts/get": {"accounts": ACCT},
+    })
+    store.set_meta(c, "last_sync_attempt", store.now_iso())
+    monkeypatch.setattr(service, "settings", lambda: {"sync_minutes": 30})
+    monkeypatch.setattr(service, "plaid", lambda settings: p)
+    assert "skipped" in service.sync(c)
+    assert service.sync(c, force=True)["errors"] == []
+    assert any(path == "/accounts/get" for path, body in p.calls)
+
+
+def test_full_refresh_preserves_holdings_when_response_is_incomplete():
+    invest = {"account_id": "invest", "name": "Brokerage", "type": "investment", "balances": {"current": 50}}
+    c, p = linked({
+        "/transactions/sync": {"accounts": [], "has_more": False, "next_cursor": "latest"},
+        "/accounts/get": {"accounts": [invest]},
+        "/investments/holdings/get": {},
+    })
+    wealth.save_holdings(c, [{"account_id": "invest", "security_id": "s1", "quantity": 1, "institution_value": 50}], [])
+    result = p.sync(c, full=True)
+    assert c.execute("SELECT COUNT(*) FROM holdings").fetchone()[0] == 1
+    assert any("BAD_RESPONSE" in note for note in result["notes"])

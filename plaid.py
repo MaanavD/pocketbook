@@ -198,8 +198,8 @@ class Plaid:
 
     # ---------- sync ----------
 
-    def sync(self, conn) -> dict:
-        summary = {"items": 0, "added": 0, "modified": 0, "removed": 0, "errors": []}
+    def sync(self, conn, full: bool = False) -> dict:
+        summary = {"items": 0, "added": 0, "modified": 0, "removed": 0, "accounts": 0, "errors": [], "environment": self.env}
         for item in conn.execute("SELECT * FROM items WHERE token_env IS NOT NULL").fetchall():
             token = self.secrets["get"](item["token_env"])
             if not token:
@@ -207,8 +207,8 @@ class Plaid:
                 summary["errors"].append(f"{item['institution']}: access token missing; reconnect it")
                 continue
             try:
-                counts = self._sync_item(conn, item, token)
-                for k in ("added", "modified", "removed"):
+                counts = self._sync_item(conn, item, token, full=full)
+                for k in ("added", "modified", "removed", "accounts"):
                     summary[k] += counts[k]
                 if counts.get("investments_error"):
                     summary.setdefault("notes", []).append(
@@ -225,7 +225,7 @@ class Plaid:
         snapshot(conn, date.today())
         return summary
 
-    def _sync_item(self, conn, item, token: str) -> dict:
+    def _sync_item(self, conn, item, token: str, full: bool = False) -> dict:
         cursor = item["cursor"] or ""
         counts = {"added": 0, "modified": 0, "removed": 0}
         for _ in range(3):  # Plaid asks callers to restart pagination if data changes mid-sync
@@ -252,14 +252,17 @@ class Plaid:
         else:
             raise PlaidError("TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION",
                              "the bank's data kept changing during the sync; nothing was saved")
-        if not accts:
+        if full or not accts:
             accts = self.call("/accounts/get", {"access_token": token}).get("accounts", [])
         save_sync(conn, item["item_id"], accts, added, modified, removed, cursor)
-        counts.update(added=len(added), modified=len(modified), removed=len(removed))
+        counts.update(added=len(added), modified=len(modified), removed=len(removed), accounts=len(accts))
         if any(a.get("type") in ("investment", "brokerage") for a in accts):
             try:
                 inv = self.call("/investments/holdings/get", {"access_token": token})
-                save_holdings(conn, inv.get("holdings", []), inv.get("securities", []))
+                if not isinstance(inv.get("holdings"), list) or not isinstance(inv.get("securities"), list):
+                    raise PlaidError("BAD_RESPONSE", "Plaid did not return a complete holdings snapshot")
+                save_holdings(conn, inv["holdings"], inv["securities"],
+                              account_ids=[a["account_id"] for a in accts if a.get("type") in ("investment", "brokerage")])
             except PlaidError as e:
                 counts["investments_error"] = e.code  # not fatal: balances still count toward net worth
         return counts

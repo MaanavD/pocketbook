@@ -34,6 +34,7 @@ def has_live_items(conn) -> bool:
 
 
 def sync(conn=None, force: bool = False) -> dict:
+    """Manual sync bypasses the interval and fetches every account, including loans."""
     conn = conn or connect()
     s = settings()
     if not has_live_items(conn):
@@ -43,7 +44,7 @@ def sync(conn=None, force: bool = False) -> dict:
         age = datetime.now(timezone.utc) - datetime.fromisoformat(last)
         if age < timedelta(minutes=int(s.get("sync_minutes") or 30)):
             return {"skipped": f"synced {int(age.total_seconds() // 60)} min ago"}
-    result = plaid(s).sync(conn)
+    result = plaid(s).sync(conn, full=force)
     _notify_ui("synced", result)
     return result
 
