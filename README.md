@@ -4,6 +4,13 @@
 
 Your budget, spending and money alerts inside Hermes. Pocketbook syncs your bank and card accounts through your own Plaid keys, proposes budgets from your history, adds a Finance tab to Hermes Desktop and the web dashboard, and messages you when something needs a look.
 
+## Screenshots
+
+The screenshots show Pocketbook running in the Hermes web dashboard with synthetic sample data. No real bank data or credentials are shown.
+
+![Finance overview with spending, budgets, alerts and net worth](docs/screenshots/finance-overview.png)
+![Bank and account inclusion controls](docs/screenshots/finance-accounts.png)
+
 ## What it does
 
 - **Finance tab**: overview (spending, budgets, alerts, bills), budget, cash flow, net worth and investments, goals, purchases, transactions with account/date filters and editable categories, and bank/account controls.
@@ -92,6 +99,8 @@ The Budget tab lets you add, edit and remove monthly category budgets as well as
 ## Limits
 
 US banks and USD only. Holdings come from Plaid Investments, which some institutions do not support; their balances still count toward net worth. Net worth history starts at your first sync. One person per Hermes profile. Plaid access and connection limits depend on your plan and approved products. Bills are detected from history (three or more charges on a steady cadence), so a new bill appears after its third charge. Amazon orders match a charge only when the totals agree, so orders split across shipments may stay unmatched; their items still count. Importing a CSV that overlaps a connected bank duplicates those charges, so remove one with `money_import remove=...`. Import column names come from public descriptions of each app's export, so a format change can need a fix.
+
+Scheduled alert delivery is recorded before the model's message is delivered, so a failed delivery may not be retried automatically. The alert remains visible in Finance. Real Plaid production sign-in was not exercised in the submitted smoke test; use Plaid sandbox testing before relying on production connections.
 
 ## Development
 

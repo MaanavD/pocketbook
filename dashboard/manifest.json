@@ -3,7 +3,7 @@
   "label": "Finance",
   "description": "Budget, spending, alerts and transactions from your connected accounts",
   "icon": "BarChart3",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "tab": { "path": "/finance", "position": "after:analytics" },
   "entry": "dist/index.js",
   "api": "plugin_api.py"
