@@ -8,6 +8,7 @@ import webbrowser
 
 from . import demo, imports, service
 from .insights import category_key
+from .plaid import PlaidError
 from .store import connect, today
 
 
@@ -31,6 +32,13 @@ def setup(parser) -> None:
 
 
 def run(args) -> None:
+    try:
+        _run(args)
+    except (ValueError, PlaidError) as e:  # expected refusals read better as one line than as a traceback
+        raise SystemExit(f"pocketbook: {e}") from None
+
+
+def _run(args) -> None:
     cmd = getattr(args, "pocketbook_cmd", None) or "status"
     conn = connect()
     if cmd == "status":
@@ -48,7 +56,9 @@ def run(args) -> None:
             time.sleep(5)
             try:
                 added = p.finish_link(conn)
-            except Exception:
+            except PlaidError as e:
+                if e.code != "LINK_PENDING":
+                    raise  # a real failure; waiting ten minutes will not fix it
                 continue
             print("Connected:", ", ".join(a["institution"] for a in added))
             print(json.dumps(service.sync(conn, force=True), indent=2))

@@ -32,7 +32,7 @@ def add_orders(conn, orders: list[dict], source: str = "amazon") -> dict:
             items = [i for i in o.get("items") or [] if (i.get("name") or "").strip()]
             if not items:
                 continue
-            day = o["date"][:10]
+            day = date.fromisoformat(str(o.get("date") or "")[:10]).isoformat()  # a bad date fails the batch here
             prices = [round(float(i["price"]) * 100) if i.get("price") not in (None, "") else None for i in items]
             total = round(float(o["total"]) * 100) if o.get("total") not in (None, "") else None
             if all(p is not None for p in prices) and sum(prices) > 0:
@@ -83,6 +83,8 @@ def match(conn) -> int:
 
 
 def set_lifespan(conn, key: str, days: int | None, source: str = "you") -> None:
+    if days is not None and not 0 <= days <= 36500:
+        raise ValueError("lifespan must be between 1 day and 100 years")
     with _lock, conn:
         conn.execute("INSERT INTO products(key, lifespan_days, lifespan_source) VALUES(?,?,?)"
                      " ON CONFLICT(key) DO UPDATE SET lifespan_days=excluded.lifespan_days,"

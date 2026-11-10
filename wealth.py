@@ -189,7 +189,7 @@ def add_goal(conn, name: str, target_cents: int, target_date: str | None = None,
     if target_cents <= 0:
         raise ValueError("target must be positive")
     if target_date:
-        date.fromisoformat(target_date)
+        target_date = date.fromisoformat(target_date).isoformat()
     start = saved_cents
     if account_id:
         row = conn.execute("SELECT current_cents FROM accounts WHERE account_id = ?", (account_id,)).fetchone()
@@ -208,6 +208,14 @@ def update_goal(conn, goal_id: int, **fields) -> None:
     sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not sets:
         return
+    # goals() divides by the target and parses the date on every overview; a bad value would break them all.
+    if "target_cents" in sets and sets["target_cents"] <= 0:
+        raise ValueError("target must be positive")
+    if "target_date" in sets:
+        sets["target_date"] = date.fromisoformat(sets["target_date"]).isoformat() if sets["target_date"] else None
+    if sets.get("account_id") and not conn.execute(
+            "SELECT 1 FROM accounts WHERE account_id = ?", (sets["account_id"],)).fetchone():
+        raise ValueError(f"unknown account {sets['account_id']}")
     with _lock, conn:
         conn.execute(f"UPDATE goals SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?", [*sets.values(), goal_id])
 

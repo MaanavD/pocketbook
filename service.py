@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,18 +63,23 @@ def check(conn=None, now: datetime | None = None) -> dict:
 
 
 def chart(kind: str, month: str | None = None, merchant: str | None = None, conn=None) -> Path:
+    if kind not in charts.KINDS:  # checked before `kind` becomes part of a file name
+        raise ValueError(f"unknown chart {kind!r}; use one of {', '.join(charts.KINDS)}")
     from plugins.plugin_storage import plugin_data_dir
 
     conn = conn or connect()
-    out = plugin_data_dir(PLUGIN_ID) / "charts" / f"{kind}-{now_iso().replace(':', '')[:15]}.png"
+    folder = plugin_data_dir(PLUGIN_ID) / "charts"
+    if folder.is_dir():
+        for old in folder.glob("*.png"):  # charts show balances; keep a week, not forever
+            if time.time() - old.stat().st_mtime > 7 * 86400:
+                old.unlink(missing_ok=True)
+    out = folder / f"{kind}-{now_iso().replace(':', '')[:15]}.png"
     if kind == "merchant":
         if not merchant:
             raise ValueError("merchant chart needs a merchant name")
         return charts.merchant(conn, today(), out, merchant)
     if kind == "spending":
         return charts.spending(conn, today(), out, month)
-    if kind not in charts.KINDS:
-        raise ValueError(f"unknown chart {kind!r}; use one of {', '.join(charts.KINDS)}")
     return charts.KINDS[kind](conn, today(), out)
 
 
