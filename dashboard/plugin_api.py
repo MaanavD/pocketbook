@@ -30,6 +30,7 @@ demo = importlib.import_module(f"{_PKG}.demo")
 insights = importlib.import_module(f"{_PKG}.insights")
 service = importlib.import_module(f"{_PKG}.service")
 store = importlib.import_module(f"{_PKG}.store")
+wealth = importlib.import_module(f"{_PKG}.wealth")
 PlaidError = importlib.import_module(f"{_PKG}.plaid").PlaidError
 
 router = APIRouter()
@@ -49,6 +50,7 @@ def _summary():
     t = store.today()
     s = service.settings()
     p = service.plaid(s)
+    cats = {*insights.LABELS, *(r[0] for r in conn.execute(f"SELECT DISTINCT {insights.CAT_SQL} {insights.FROM_SQL}"))}
     return {
         "overview": insights.overview(conn, t),
         "budgets": insights.budget_status(conn, t),
@@ -58,6 +60,11 @@ def _summary():
         "alerts": alerts.listing(conn, limit=20),
         "accounts": insights.accounts(conn),
         "recent": insights.find_transactions(conn, limit=12),
+        "networth": wealth.networth(conn, t, days=365),
+        "investments": wealth.investments(conn),
+        "goals": wealth.goals(conn, t),
+        "rules": wealth.list_rules(conn),
+        "categories": {k: insights.label(k) for k in sorted(cats)},
         "setup": {"plaid_configured": p.configured, "plaid_env": p.env,
                   "linking": bool(store.get_meta(conn, "pending_link_token")),
                   "live_items": service.has_live_items(conn)},
@@ -162,6 +169,67 @@ async def test_bank():
         conn = store.connect()
         added = service.plaid().sandbox_link(conn)
         return {"added": added, "sync": service.sync(conn, force=True)}
+    return await _run(go)
+
+
+class GoalBody(BaseModel):
+    action: str = "add"
+    id: int | None = None
+    name: str | None = None
+    target: float | None = None
+    target_date: str | None = None
+    account_id: str | None = None
+    saved: float | None = None
+
+
+@router.post("/goals")
+async def goals(body: GoalBody):
+    def go():
+        conn = store.connect()
+        c = lambda v: None if v is None else int(round(v * 100))
+        if body.action == "add":
+            wealth.add_goal(conn, body.name or "Goal", c(body.target) or 0, body.target_date or None,
+                            body.account_id or None, c(body.saved) or 0)
+        elif body.action == "update":
+            wealth.update_goal(conn, body.id, name=body.name, target_cents=c(body.target),
+                               target_date=body.target_date, saved_cents=c(body.saved))
+        elif body.action == "remove":
+            wealth.remove_goal(conn, body.id)
+        return {"goals": wealth.goals(conn, store.today())}
+    return await _run(go)
+
+
+class RuleBody(BaseModel):
+    action: str = "add"
+    id: int | None = None
+    match: str | None = None
+    category: str | None = None
+
+
+@router.post("/rules")
+async def rules(body: RuleBody):
+    def go():
+        conn = store.connect()
+        if body.action == "add":
+            wealth.add_rule(conn, body.match or "", insights.category_key(body.category or ""))
+        elif body.action == "remove":
+            wealth.remove_rule(conn, body.id)
+        return {"rules": wealth.list_rules(conn)}
+    return await _run(go)
+
+
+class RecatBody(BaseModel):
+    id: str
+    category: str
+    all_from_merchant: bool = False
+
+
+@router.post("/transactions/category")
+async def recategorize(body: RecatBody):
+    def go():
+        conn = store.connect()
+        return {"updated": insights.recategorize(conn, body.id, insights.category_key(body.category),
+                                                 body.all_from_merchant)}
     return await _run(go)
 
 

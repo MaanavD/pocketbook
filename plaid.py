@@ -7,7 +7,10 @@ import json
 import urllib.error
 import urllib.request
 
+from datetime import date
+
 from .store import _lock, cents, get_meta, now_iso, set_meta
+from .wealth import apply_rules, save_holdings, snapshot
 
 HOSTS = {"sandbox": "https://sandbox.plaid.com", "production": "https://production.plaid.com"}
 CLIENT_ID_ENV = "POCKETBOOK_PLAID_CLIENT_ID"
@@ -76,6 +79,7 @@ class Plaid:
             "client_name": "Pocketbook for Hermes",
             "user": {"client_user_id": f"pocketbook-{user}"},
             "products": ["transactions"],
+            "optional_products": ["investments"],
             "transactions": {"days_requested": 730},
             "country_codes": ["US"],
             "language": "en",
@@ -109,12 +113,17 @@ class Plaid:
         """Sandbox only: create a test bank connection without a browser."""
         if self.env != "sandbox":
             raise PlaidError("NOT_SANDBOX", "Test connections only work with plaid_env = sandbox.")
-        res = self.call("/sandbox/public_token/create", {
+        body = {
             "institution_id": institution_id,
-            "initial_products": ["transactions"],
+            "initial_products": ["transactions", "investments"],
             "options": {"override_username": "user_transactions_dynamic", "override_password": "pass_good",
                         "transactions": {"days_requested": 730}},
-        })
+        }
+        try:
+            res = self.call("/sandbox/public_token/create", body)
+        except PlaidError:
+            body["initial_products"] = ["transactions"]  # test user without investment accounts
+            res = self.call("/sandbox/public_token/create", body)
         return self.add_item(conn, res["public_token"], "Plaid Sandbox Bank")
 
     def add_item(self, conn, public_token: str, institution: str | None) -> dict:
@@ -142,6 +151,8 @@ class Plaid:
                 pass  # still forget it locally
             self.secrets["remove"](row[0])
         with _lock:
+            conn.execute("DELETE FROM holdings WHERE account_id IN (SELECT account_id FROM accounts WHERE item_id=?)",
+                         (item_id,))
             conn.execute("DELETE FROM transactions WHERE item_id=?", (item_id,))
             conn.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
             conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
@@ -161,12 +172,16 @@ class Plaid:
                 counts = self._sync_item(conn, item, token)
                 for k in ("added", "modified", "removed"):
                     summary[k] += counts[k]
+                if counts.get("investments_error"):
+                    summary.setdefault("notes", []).append(
+                        f"{item['institution']}: holdings unavailable ({counts['investments_error']})")
                 summary["items"] += 1
                 _item_status(conn, item["item_id"], "ok", None, synced=True)
             except PlaidError as e:
                 _item_status(conn, item["item_id"], "error", e.code)
                 summary["errors"].append(f"{item['institution']}: {e}")
         set_meta(conn, "last_sync_attempt", now_iso())
+        snapshot(conn, date.today())
         return summary
 
     def _sync_item(self, conn, item, token: str) -> dict:
@@ -197,6 +212,12 @@ class Plaid:
             accts = self.call("/accounts/get", {"access_token": token}).get("accounts", [])
         save_sync(conn, item["item_id"], accts, added, modified, removed, cursor)
         counts.update(added=len(added), modified=len(modified), removed=len(removed))
+        if any(a.get("type") in ("investment", "brokerage") for a in accts):
+            try:
+                inv = self.call("/investments/holdings/get", {"access_token": token})
+                save_holdings(conn, inv.get("holdings", []), inv.get("securities", []))
+            except PlaidError as e:
+                counts["investments_error"] = e.code  # not fatal: balances still count toward net worth
         return counts
 
 
@@ -239,6 +260,8 @@ def save_sync(conn, item_id, accts, added, modified, removed, cursor) -> None:
         for r in removed:
             conn.execute("DELETE FROM transactions WHERE id=?", (r["transaction_id"],))
         conn.execute("UPDATE items SET cursor=? WHERE item_id=?", (cursor, item_id))
+    if added or modified:
+        apply_rules(conn)
 
 
 def _c(v):

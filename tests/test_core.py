@@ -92,11 +92,11 @@ def test_demo_alerts_fire_once(conn):
     insights.approve_budgets(conn)
     found = alerts.detect(conn, TODAY, {})
     kinds = sorted(a["kind"] for a in found)
-    assert kinds == ["bill", "bill", "budget", "budget", "duplicate", "large", "subscription", "unusual"]
-    assert len(alerts.record(conn, found)) == 8
+    assert kinds == ["bill", "bill", "budget", "budget", "duplicate", "goal", "large", "subscription", "unusual"]
+    assert len(alerts.record(conn, found)) == 9
     assert alerts.record(conn, alerts.detect(conn, TODAY, {})) == []  # same conditions, no repeats
     first = alerts.take_unsent(conn, {"quiet_hours": ""}, datetime(2026, 11, 9, 12))
-    assert len(first["alerts"]) == 8
+    assert len(first["alerts"]) == 9
     assert alerts.take_unsent(conn, {"quiet_hours": ""}, datetime(2026, 11, 9, 13))["alerts"] == []
 
 
@@ -109,7 +109,7 @@ def test_fixed_bills_do_not_trigger_pace_alerts(conn):
 
 def test_settings_turn_alert_kinds_off(conn):
     found = alerts.detect(conn, TODAY, {"alert_unusual": False, "alert_bills": False, "large_purchase_dollars": 0})
-    assert sorted(a["kind"] for a in found) == ["subscription"]
+    assert sorted(a["kind"] for a in found) == ["goal", "subscription"]
 
 
 def test_new_charge_alerts_after_backfill(conn):
@@ -179,3 +179,74 @@ def test_link_exchange_and_paginated_sync():
     assert (res["added"], res["errors"]) == (2, [])
     assert c.execute("SELECT cursor FROM items").fetchone()[0] == "c2"
     assert p.calls[-1][1]["cursor"] == "c1"
+
+
+# ---------- net worth, investments, goals, rules ----------
+
+from pocketbook import wealth  # noqa: E402
+
+
+def test_rules_recategorize_now_and_on_future_syncs():
+    c = fresh()
+    save_sync(c, "i1", ACCTS, [tx("1", "2026-11-02", 40, "TRADER JOE'S #12"), tx("2", "2026-11-03", 9, "Cafe")], [], [], "c")
+    added = wealth.add_rule(c, "trader joe", "GROCERIES")
+    assert added["matched"] == 1
+    save_sync(c, "i1", [], [tx("3", "2026-11-04", 60, "Trader Joe's")], [], [], "c2")
+    start, end = insights.month_range("2026-11")
+    cats = {r["category"]: r["cents"] for r in insights.spending_by_category(c, start, end)}
+    assert cats == {"GROCERIES": 10000, "FOOD_AND_DRINK": 900}
+    assert insights.label("GROCERIES") == "Groceries"
+    wealth.add_rule(c, "joe", "FUN")  # newer rule wins
+    assert c.execute("SELECT DISTINCT rule_category FROM transactions WHERE id IN ('1','3')").fetchall()[0][0] == "FUN"
+    insights.recategorize(c, "1", "TRAVEL")  # a manual change beats any rule
+    assert insights.find_transactions(c, ids=["1"])[0]["category"] == "TRAVEL"
+    wealth.remove_rule(c, added["id"] + 1)
+    assert insights.find_transactions(c, ids=["3"])[0]["category"] == "GROCERIES"
+
+
+def test_networth_counts_assets_minus_liabilities(conn):
+    nw = wealth.networth(conn, TODAY)
+    assert nw["assets_cents"] == 482037 + 1240000 + 5053208 + 6183104
+    assert nw["liabilities_cents"] == 123618 + 1842077
+    assert nw["net_cents"] == nw["assets_cents"] - nw["liabilities_cents"]
+    assert nw["history"][-1]["net_cents"] == nw["net_cents"]
+
+
+def test_investments_match_account_balances_in_demo(conn):
+    inv = wealth.investments(conn)
+    assert inv["total_cents"] == wealth.balances(conn)["investments_cents"]
+    assert sum(a["value_cents"] for a in inv["allocation"]) == inv["total_cents"]
+    assert inv["holdings"][0]["ticker"] == "FXAIX"
+
+
+def test_goal_progress_and_pace():
+    c = store.memory()
+    save_sync(c, "i1", [{"account_id": "s", "name": "Savings", "type": "depository", "balances": {"current": 5000}}],
+              [], [], [], "c")
+    wealth.add_goal(c, "Cushion", 1000000, "2027-11-09", "s")
+    c.execute("UPDATE goals SET created_at = '2025-11-09T00:00:00+00:00', start_cents = 0")
+    g = wealth.goals(c, TODAY)[0]
+    assert (g["current_cents"], g["pct"], g["expected_cents"], g["status"]) == (500000, 50, 500000, "on_track")
+    wealth.add_goal(c, "Trip", 300000, saved_cents=300000)
+    assert wealth.goals(c, TODAY)[1]["status"] == "done"
+    assert [a["title"] for a in alerts.detect(c, TODAY, {}) if a["kind"] == "goal"] == ["Goal reached: Trip"]
+
+
+def test_holdings_sync_from_plaid():
+    c = store.memory()
+    invest = {"account_id": "b1", "name": "Brokerage", "type": "investment", "balances": {"current": 1500}}
+    p = FakePlaid({
+        "/transactions/sync": {"added": [], "modified": [], "removed": [], "next_cursor": "c", "has_more": False,
+                               "accounts": [invest]},
+        "/investments/holdings/get": {
+            "holdings": [{"account_id": "b1", "security_id": "s1", "quantity": 10, "institution_value": 1500,
+                          "cost_basis": 1000}],
+            "securities": [{"security_id": "s1", "name": "Index Fund", "ticker_symbol": "IDX", "type": "etf",
+                            "close_price": 150}]},
+    })
+    p.secrets["save"]("TOKEN", "access")
+    c.execute("INSERT INTO items(item_id, institution, token_env) VALUES('i1', 'Broker', 'TOKEN')")
+    assert p.sync(c)["errors"] == []
+    inv = wealth.investments(c)
+    assert (inv["total_cents"], inv["gain_cents"], inv["allocation"][0]["type"]) == (150000, 50000, "ETFs")
+    assert c.execute("SELECT COUNT(*) FROM networth").fetchone()[0] == 1

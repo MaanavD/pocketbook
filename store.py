@@ -39,6 +39,30 @@ _SCHEMA = [
         dismissed_at TEXT
     );
     """,
+    # v2: net worth, investments, goals, categorization rules
+    """
+    ALTER TABLE transactions ADD COLUMN rule_category TEXT;
+    CREATE TABLE rules (
+        id INTEGER PRIMARY KEY, pattern TEXT NOT NULL, category TEXT NOT NULL,
+        min_cents INTEGER, max_cents INTEGER, created_at TEXT NOT NULL
+    );
+    CREATE TABLE goals (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, target_cents INTEGER NOT NULL, target_date TEXT,
+        account_id TEXT, saved_cents INTEGER NOT NULL DEFAULT 0, start_cents INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, done_at TEXT
+    );
+    CREATE TABLE securities (
+        security_id TEXT PRIMARY KEY, name TEXT, ticker TEXT, type TEXT, close_cents INTEGER, close_date TEXT
+    );
+    CREATE TABLE holdings (
+        account_id TEXT NOT NULL, security_id TEXT NOT NULL, quantity REAL, value_cents INTEGER,
+        cost_cents INTEGER, updated_at TEXT, PRIMARY KEY (account_id, security_id)
+    );
+    CREATE TABLE networth (
+        date TEXT PRIMARY KEY, assets_cents INTEGER NOT NULL, liabilities_cents INTEGER NOT NULL,
+        cash_cents INTEGER, investments_cents INTEGER, credit_cents INTEGER, loans_cents INTEGER
+    );
+    """,
 ]
 
 _lock = threading.RLock()

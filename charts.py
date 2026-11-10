@@ -199,4 +199,85 @@ def daily(conn, today: date, out: Path) -> Path:
     return cv.save(out)
 
 
-KINDS = {"spending": spending, "trend": trend, "merchant": merchant, "pace": daily}
+def networth(conn, today: date, out: Path) -> Path:
+    from . import wealth
+
+    nw = wealth.networth(conn, today, days=365)
+    hist = nw["history"]
+    change = nw["change_30d_cents"]
+    sub = f"{_money(nw['assets_cents'])} assets, {_money(nw['liabilities_cents'])} owed"
+    if change is not None:
+        sub += f"  ·  {'+' if change >= 0 else '-'}{_money(abs(change))} in 30 days"
+    cv = Canvas(720, 360, f"Net worth {_money(nw['net_cents'])}", sub)
+    top, bottom, left, right = 84, 310, 78, 690
+    if len(hist) < 2:
+        cv.text(24, 110, "Net worth history starts with your first sync. Check back tomorrow.", 14, MUTED)
+        return cv.save(out)
+    vals = [h["net_cents"] for h in hist]
+    lo, hi = min(vals), max(vals)
+    pad = max(1, (hi - lo) * 0.15)
+    lo, hi = lo - pad, hi + pad
+
+    def xy(i, v):
+        return left + (right - left) * i / (len(vals) - 1), bottom - (bottom - top) * (v - lo) / (hi - lo)
+
+    for i in range(5):
+        v = lo + (hi - lo) * i / 4
+        yy = bottom - (bottom - top) * i / 4
+        cv.line([(left, yy), (right, yy)], GRID)
+        cv.text(left - 8, yy, _money(int(v), short=True), 11, MUTED, "rm")
+    pts = [xy(i, v) for i, v in enumerate(vals)]
+    cv.d.polygon([(x * S, y * S) for x, y in pts] + [(right * S, bottom * S), (left * S, bottom * S)],
+                 fill=(221, 233, 253))
+    cv.line(pts, BAR, 3)
+    seen = set()
+    for i, h in enumerate(hist):
+        m = h["date"][:7]
+        if m not in seen and h["date"][8:] <= "07":
+            seen.add(m)
+            cv.text(xy(i, lo)[0], bottom + 14, calendar.month_abbr[int(m[5:])], 11, MUTED, "mm")
+    return cv.save(out)
+
+
+def allocation(conn, today: date, out: Path) -> Path:
+    from . import wealth
+
+    inv = wealth.investments(conn)
+    sub = f"{len(inv['holdings'])} holdings"
+    if inv["gain_cents"] is not None:
+        sub += f"  ·  {'+' if inv['gain_cents'] >= 0 else '-'}{_money(abs(inv['gain_cents']))} ({inv['gain_pct']}%) vs cost"
+    rows = inv["allocation"]
+    top_holdings = inv["holdings"][:6]
+    h = 110 + 34 * len(rows) + 40 + 30 * len(top_holdings) + 20
+    cv = Canvas(720, h, f"Investments {_money(inv['total_cents'])}", sub)
+    if not rows:
+        cv.text(24, 100, "No holdings yet. Connect a brokerage or retirement account.", 14, MUTED)
+        return cv.save(out)
+    colors = [BAR, (95, 160, 250), INCOME, WARN, (150, 110, 230), (120, 120, 130), OVER]
+    x = 24
+    for i, a in enumerate(rows):  # one stacked bar for the whole mix
+        w = (672) * a["value_cents"] / max(1, inv["total_cents"])
+        cv.rect(x, 80, x + w, 102, colors[i % len(colors)], 0)
+        x += w
+    y = 120
+    for i, a in enumerate(rows):
+        cv.rect(24, y + 2, 36, y + 14, colors[i % len(colors)], 2)
+        cv.text(44, y + 8, a["type"], 13, INK, "lm")
+        cv.text(696, y + 8, f"{_money(a['value_cents'])}  ·  {a['pct']}%", 12, MUTED, "rm")
+        y += 34
+    y += 10
+    cv.text(24, y, "Largest holdings", 13, MUTED)
+    y += 26
+    for hd in top_holdings:
+        cv.text(24, y, hd["ticker"] or hd["name"] or "?", 13, INK, "lm")
+        cv.text(110, y, (hd["name"] or "")[:44], 12, MUTED, "lm")
+        gain = hd["gain_cents"]
+        if gain is not None:
+            cv.text(696, y, f"{'+' if gain >= 0 else '-'}{_money(abs(gain))}", 12, INCOME if gain >= 0 else OVER, "rm")
+        cv.text(610, y, _money(hd["value_cents"] or 0), 12, INK, "rm")
+        y += 30
+    return cv.save(out)
+
+
+KINDS = {"spending": spending, "trend": trend, "merchant": merchant, "pace": daily, "networth": networth,
+         "investments": allocation}

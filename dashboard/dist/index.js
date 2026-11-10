@@ -147,7 +147,7 @@ function Setup ({ setup, act, busy }) {
 }
 
 const KIND = { large: 'Large purchase', unusual: 'Unusual charge', duplicate: 'Double charge', new_merchant: 'New merchant',
-  subscription: 'Price increase', bill: 'Bill due', budget: 'Budget', connection: 'Connection' }
+  subscription: 'Price increase', bill: 'Bill due', budget: 'Budget', connection: 'Connection', goal: 'Goal' }
 
 function Alerts ({ alerts, act, showTxns }) {
   if (!alerts.length) {
@@ -218,7 +218,7 @@ function Budgets ({ budgets, act, busy }) {
   h(Proposals, { proposed: budgets.proposed, act, busy }))
 }
 
-function Transactions ({ initial, api, filter, clearFilter }) {
+function Transactions ({ initial, api, filter, clearFilter, categories, onChanged }) {
   const [q, setQ] = useState('')
   const [rows, setRows] = useState(initial)
   useEffect(() => {
@@ -237,11 +237,165 @@ function Transactions ({ initial, api, filter, clearFilter }) {
       h('tbody', null, rows.map(t => h('tr', { key: t.id, style: { borderTop: `1px solid ${V.line}` } },
         h('td', { style: { padding: '7px 8px 7px 0', ...S.muted, whiteSpace: 'nowrap' } }, day(t.date)),
         h('td', { style: { padding: '7px 8px', fontWeight: 500 } }, t.merchant, t.pending && h('span', { style: { ...S.muted, fontWeight: 400 } }, ' · pending')),
-        h('td', { style: { padding: '7px 8px', ...S.muted } }, t.category_label),
+        h('td', { style: { padding: '7px 8px', ...S.muted } }, h(CategoryCell, { t, categories, api, onChanged })),
         h('td', { style: { padding: '7px 8px', ...S.muted, whiteSpace: 'nowrap' } }, t.account),
         h('td', { style: { padding: '7px 0 7px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: t.amount_cents < 0 ? V.green : 'inherit' } },
           t.amount_cents < 0 ? `+${money(-t.amount_cents)}` : money(t.amount_cents))))))),
   !rows.length && h('div', { style: S.muted }, 'No matching transactions.'))
+}
+
+
+// ---------- net worth, investments, goals, rules ----------
+
+function AreaChart ({ points }) {
+  const W = 640, H = 200, L = 52, R = 12, T = 12, B = 26
+  if (points.length < 2) return h('div', { style: S.muted }, 'History starts with your first sync.')
+  const vals = points.map(p => p.net_cents)
+  let lo = Math.min(...vals), hi = Math.max(...vals)
+  const pad = Math.max(1, (hi - lo) * 0.15); lo -= pad; hi += pad
+  const x = i => L + (W - L - R) * i / (vals.length - 1)
+  const y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo))
+  const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
+  const months = []
+  points.forEach((p, i) => { if (p.date.slice(8) <= '07' && !months.some(m => m.m === p.date.slice(0, 7))) months.push({ m: p.date.slice(0, 7), i }) })
+  return h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', 'aria-label': 'Net worth over time' },
+    [0, 0.5, 1].map((f, i) => h('g', { key: i },
+      h('line', { x1: L, x2: W - R, y1: y(lo + (hi - lo) * f), y2: y(lo + (hi - lo) * f), stroke: V.line }),
+      h('text', { x: L - 6, y: y(lo + (hi - lo) * f) + 4, textAnchor: 'end', fontSize: 10, fill: V.muted }, short(lo + (hi - lo) * f)))),
+    h('path', { d: `${line}L${x(vals.length - 1)},${H - B}L${L},${H - B}Z`, fill: V.accent, opacity: 0.12 }),
+    h('path', { d: line, fill: 'none', stroke: V.accent, strokeWidth: 2, strokeLinejoin: 'round' }),
+    months.map(m => h('text', { key: m.m, x: x(m.i), y: H - 8, textAnchor: 'middle', fontSize: 10, fill: V.muted }, monthAbbr(m.m))))
+}
+
+const PALETTE = [V.accent, 'var(--ui-blue, #5fa0fa)', V.green, V.yellow, 'var(--ui-purple, #9670e6)', V.faint, V.red]
+const signed = c => `${c >= 0 ? '+' : '−'}${money(Math.abs(c), true)}`
+
+function NetWorth ({ nw }) {
+  const side = s => nw.accounts.filter(a => a.side === s)
+  const list = (title, rows, total) => h('div', { style: { flex: 1, minWidth: 220 } },
+    h('div', { style: { ...S.row, justifyContent: 'space-between', fontWeight: 600, marginBottom: 4 } }, h('span', null, title), h('span', null, money(total, true))),
+    rows.map(a => h('div', { key: a.account_id, style: { ...S.row, justifyContent: 'space-between', padding: '4px 0', borderTop: `1px solid ${V.line}` } },
+      h('span', null, a.name, h('span', { style: S.muted }, a.mask ? ` ••${a.mask}` : '')),
+      h('span', null, money(a.current_cents, true)))))
+  return h(Card, { title: `Net worth ${money(nw.net_cents, true)}`,
+    right: nw.change_30d_cents != null && h('span', { style: { color: nw.change_30d_cents >= 0 ? V.green : V.red } }, `${signed(nw.change_30d_cents)} in 30 days`) },
+  h(AreaChart, { points: nw.history }),
+  h('div', { style: { display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 12 } },
+    list('Assets', side('asset'), nw.assets_cents), list('Liabilities', side('liability'), nw.liabilities_cents)))
+}
+
+function Investments ({ inv }) {
+  if (!inv.holdings.length) {
+    return h(Card, { title: 'Investments' }, h('div', { style: S.muted },
+      inv.accounts_without_holdings.length ? 'Your investment accounts did not share holdings. Balances still count toward net worth.'
+        : 'No investment accounts yet. Connect a brokerage or retirement account to see holdings and allocation.'))
+  }
+  return h(Card, { title: `Investments ${money(inv.total_cents, true)}`,
+    right: inv.gain_cents != null && h('span', { style: { color: inv.gain_cents >= 0 ? V.green : V.red } }, `${signed(inv.gain_cents)} (${inv.gain_pct}%) vs cost`) },
+  h('div', { style: { display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', margin: '4px 0 10px' } },
+    inv.allocation.map((a, i) => h('div', { key: a.type, title: `${a.type} ${a.pct}%`, style: { width: `${a.pct}%`, background: PALETTE[i % PALETTE.length] } }))),
+  h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginBottom: 12 } },
+    inv.allocation.map((a, i) => h('span', { key: a.type, style: S.row },
+      h('span', { style: { width: 9, height: 9, borderRadius: 2, background: PALETTE[i % PALETTE.length] } }),
+      `${a.type} `, h('span', { style: S.muted }, `${a.pct}%`)))),
+  h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+    h('tbody', null, inv.holdings.map((x, i) => h('tr', { key: i, style: { borderTop: `1px solid ${V.line}` } },
+      h('td', { style: { padding: '6px 8px 6px 0', fontWeight: 600 } }, x.ticker || '—'),
+      h('td', { style: { padding: '6px 8px', ...S.muted } }, x.name),
+      h('td', { style: { padding: '6px 8px', ...S.muted, whiteSpace: 'nowrap' } }, x.account),
+      h('td', { style: { padding: '6px 8px', textAlign: 'right' } }, money(x.value_cents, true)),
+      h('td', { style: { padding: '6px 0 6px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: x.gain_cents == null ? V.muted : x.gain_cents >= 0 ? V.green : V.red } },
+        x.gain_cents == null ? '—' : signed(x.gain_cents))))))))
+}
+
+function SavedEditor ({ g, post }) {
+  const [v, setV] = useState(null)
+  if (v === null) return h(Button, { onClick: () => setV(String(g.current_cents / 100)) }, 'Update saved')
+  const save = () => { if (v !== '' && !isNaN(Number(v))) post('/goals', { action: 'update', id: g.id, saved: Number(v) }); setV(null) }
+  return h('span', { style: S.row },
+    h('input', { style: { ...S.input, width: 90, textAlign: 'right' }, autoFocus: true, inputMode: 'decimal', value: v,
+      onChange: e => setV(e.target.value), onKeyDown: e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setV(null) } }),
+    h(Button, { primary: true, onClick: save }, 'Save'))
+}
+
+const GOAL_STATUS = { on_track: ['On track', null], behind: ['Behind', 'yellow'], overdue: ['Past due', 'red'], done: ['Reached', 'green'], no_date: ['No date', null] }
+
+function Goals ({ goals, accounts, post, busy }) {
+  const blank = { name: '', target: '', target_date: '', account_id: '', saved: '' }
+  const [form, setForm] = useState(blank)
+  const [open, setOpen] = useState(false)
+  const set = k => e => setForm({ ...form, [k]: e.target.value })
+  const add = async () => {
+    await post('/goals', { action: 'add', name: form.name, target: Number(form.target), target_date: form.target_date || null,
+      account_id: form.account_id || null, saved: form.account_id ? null : Number(form.saved || 0) })
+    setForm(blank); setOpen(false)
+  }
+  return h(Card, { title: 'Savings goals', right: h(Button, { onClick: () => setOpen(!open) }, open ? 'Cancel' : 'New goal') },
+    open && h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 } },
+      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Name, e.g. Emergency fund', value: form.name, onChange: set('name') }),
+      h('input', { style: { ...S.input, flex: '1 1 100px' }, placeholder: 'Target $', inputMode: 'decimal', value: form.target, onChange: set('target') }),
+      h('input', { style: { ...S.input, flex: '1 1 130px' }, type: 'date', value: form.target_date, onChange: set('target_date') }),
+      h('select', { style: { ...S.input, flex: '2 1 180px' }, value: form.account_id, onChange: set('account_id') },
+        h('option', { value: '' }, 'Track manually'),
+        accounts.filter(a => a.type === 'depository' || a.type === 'investment').map(a => h('option', { key: a.account_id, value: a.account_id }, `Follow ${a.name} balance`))),
+      !form.account_id && h('input', { style: { ...S.input, flex: '1 1 100px' }, placeholder: 'Saved so far $', inputMode: 'decimal', value: form.saved, onChange: set('saved') }),
+      h(Button, { primary: true, disabled: busy || !form.name || !(Number(form.target) > 0), onClick: add }, 'Add goal')),
+    !goals.length && !open && h('div', { style: S.muted }, 'No goals yet. A goal can follow a savings account balance or a number you update.'),
+    goals.map(g => {
+      const [word, tone] = GOAL_STATUS[g.status] || [g.status, null]
+      const color = tone ? V[tone] : V.accent
+      return h('div', { key: g.id, style: { padding: '10px 0', borderTop: `1px solid ${V.line}` } },
+        h('div', { style: { ...S.row, justifyContent: 'space-between', marginBottom: 6 } },
+          h('span', { style: { fontWeight: 600 } }, g.name, h('span', { style: { ...S.muted, fontWeight: 400 } }, g.account ? ` · follows ${g.account}` : ' · manual')),
+          h('span', { style: S.row },
+            h('span', { style: { color: tone ? color : V.muted } }, word),
+            g.tracking === 'manual' && h(SavedEditor, { g, post }),
+            h(Button, { onClick: () => post('/goals', { action: 'remove', id: g.id }), title: 'Remove goal' }, '✕'))),
+        h('div', { style: { height: 8, borderRadius: 4, background: V.track, position: 'relative' } },
+          h('div', { style: { position: 'absolute', inset: 0, width: `${g.pct}%`, borderRadius: 4, background: color } }),
+          g.expected_cents != null && g.status !== 'done' && h('div', { title: 'Where the pace says you should be', style: { position: 'absolute', top: -3, bottom: -3, width: 2,
+            left: `calc(${Math.min(100, 100 * g.expected_cents / g.target_cents)}% - 1px)`, background: 'currentColor', opacity: 0.5 } })),
+        h('div', { style: { ...S.muted, fontSize: 12, marginTop: 5 } },
+          `${money(g.current_cents, true)} of ${money(g.target_cents, true)} (${g.pct}%)`,
+          g.target_date ? ` · by ${day(g.target_date)}, ${g.target_date.slice(0, 4)}` : '',
+          g.needed_per_month_cents && g.status !== 'done' ? ` · ${money(g.needed_per_month_cents, true)}/month to finish` : ''))
+    }))
+}
+
+function Rules ({ rules, categories, post, busy }) {
+  const [match, setMatch] = useState('')
+  const [cat, setCat] = useState('')
+  const add = async () => { await post('/rules', { action: 'add', match, category: cat }); setMatch(''); setCat('') }
+  return h(Card, { title: 'Categorization rules' },
+    h('div', { style: { ...S.muted, marginBottom: 10 } }, 'Charges whose merchant contains the text get the category, now and on every sync. Type a new name to make your own category.'),
+    h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
+      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Merchant contains…', value: match, onChange: e => setMatch(e.target.value) }),
+      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Category', list: 'pb-categories', value: cat, onChange: e => setCat(e.target.value) }),
+      h('datalist', { id: 'pb-categories' }, Object.values(categories).map(l => h('option', { key: l, value: l }))),
+      h(Button, { primary: true, disabled: busy || !match.trim() || !cat.trim(), onClick: add }, 'Add rule')),
+    rules.map(r => h('div', { key: r.id, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
+      h('span', { style: { flex: 1 } }, h('span', { style: S.muted }, 'contains '), `“${r.pattern}”`, h('span', { style: S.muted }, ' → '), h('span', { style: { fontWeight: 500 } }, r.category_label)),
+      h('span', { style: S.muted }, `${r.matches} charges`),
+      h(Button, { onClick: () => post('/rules', { action: 'remove', id: r.id }), title: 'Remove rule' }, '✕'))))
+}
+
+function CategoryCell ({ t, categories, api, onChanged }) {
+  const [editing, setEditing] = useState(false)
+  if (!editing) return h('span', { style: { cursor: 'pointer', borderBottom: `1px dashed ${V.line}` }, title: 'Change category', onClick: () => setEditing(true) }, t.category_label)
+  return h('select', { style: { ...S.input, padding: '2px 4px' }, autoFocus: true, defaultValue: t.category, onBlur: () => setEditing(false),
+    onChange: async e => {
+      const all = window.confirm(`Apply to every charge from ${t.merchant}? Cancel changes just this one.`)
+      await api('/transactions/category', { method: 'POST', body: { id: t.id, category: e.target.value, all_from_merchant: all } })
+      setEditing(false); onChanged()
+    } },
+  Object.entries(categories).map(([k, l]) => h('option', { key: k, value: k }, l)))
+}
+
+function Tabs ({ value, onChange, items }) {
+  return h('div', { role: 'tablist', style: { display: 'flex', gap: 4, borderBottom: `1px solid ${V.line}` } },
+    items.map(([k, l]) => h('button', { key: k, role: 'tab', 'aria-selected': value === k, onClick: () => onChange(k),
+      style: { border: 'none', background: 'transparent', color: value === k ? 'inherit' : V.muted, font: 'inherit', fontWeight: value === k ? 600 : 400,
+        padding: '8px 12px', cursor: 'pointer', borderBottom: `2px solid ${value === k ? V.accent : 'transparent'}`, marginBottom: -1 } }, l)))
 }
 
 function FinanceApp () {
@@ -250,6 +404,7 @@ function FinanceApp () {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState(null)
   const [filter, setFilter] = useState(null)
+  const [tab, setTab] = useState('overview')
 
   const load = useCallback(() => api('/summary').then(d => { setData(d); setError(null) }).catch(e => setError(String(e && e.message || e))), [])
   useEffect(() => {
@@ -302,7 +457,11 @@ function FinanceApp () {
   const delta = o.spent_cents - o.spent_same_point_last_month_cents
   const b = data.budgets
   const left = b.total_budget_cents - b.total_spent_cents
-  const showTxns = (ids, title) => setFilter({ ids, title })
+  const showTxns = (ids, title) => { setFilter({ ids, title }); setTab('activity') }
+  const post = async (path, body) => {
+    setBusy(true)
+    try { await api(path, { method: 'POST', body }); await load() } catch (e) { setNotice(`Error: ${e && e.message || e}`) } finally { setBusy(false) }
+  }
 
   return h('div', { style: S.page },
     h('header', { style: { ...S.row, justifyContent: 'space-between', flexWrap: 'wrap' } },
@@ -318,34 +477,44 @@ function FinanceApp () {
     empty ? null : h(React.Fragment, null,
       h('div', { style: S.grid(180) },
         h(Stat, { label: 'Spent this month', value: money(o.spent_cents, true),
-          sub: `${delta >= 0 ? '+' : '−'}${money(Math.abs(delta), true)} vs same point last month`, tone: null }),
+          sub: `${delta >= 0 ? '+' : '−'}${money(Math.abs(delta), true)} vs same point last month` }),
         h(Stat, { label: 'Budget left', value: b.total_budget_cents ? money(left, true) : '—',
           sub: b.total_budget_cents ? `of ${money(b.total_budget_cents, true)} · ${b.days_in_month - b.days_elapsed} days to go` : 'No budgets yet',
           tone: b.total_budget_cents && left < 0 ? V.red : null }),
-        h(Stat, { label: 'Cash', value: money(o.cash_cents, true), sub: 'Checking and savings' }),
-        h(Stat, { label: 'Card balances', value: money(o.credit_owed_cents, true), sub: 'Owed on credit cards' })),
-      h(Alerts, { alerts: data.alerts, act, showTxns }),
-      h('div', { style: S.grid(420) },
-        h(Budgets, { budgets: b, act, busy }),
-        h(Card, { title: 'This month vs last' },
-          h(PaceChart, { pace: data.pace, budget: b.total_budget_cents }),
-          h('div', { style: { ...S.row, ...S.muted, fontSize: 12, marginTop: 6 } },
-            h('span', { style: { color: V.accent } }, '━'), ' This month', h('span', { style: { color: V.faint, marginLeft: 10 } }, '━'), ' Last month'))),
-      h('div', { style: S.grid(420) },
-        h(Card, { title: 'Last six months' }, h(MonthsChart, { months: data.months }),
-          h('div', { style: { ...S.muted, fontSize: 12, marginTop: 6 } }, 'Bars show spending; green dots show income.')),
-        h(Card, { title: 'Bills and subscriptions' },
-          data.recurring.length ? data.recurring.map(r => h('div', { key: r.merchant, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
-            h('span', { style: { flex: 1, fontWeight: 500 } }, r.merchant),
-            h('span', { style: S.muted }, `${r.cadence} · next ${day(r.next_date)}`),
-            h('span', { style: { minWidth: 70, textAlign: 'right', color: r.last_cents > r.previous_cents ? V.yellow : 'inherit' } }, money(r.last_cents))))
-            : h('div', { style: S.muted }, 'None detected yet. Pocketbook needs three charges to spot a pattern.'))),
-      h(Transactions, { initial: data.recent, api, filter, clearFilter: () => setFilter(null) }),
-      h(Card, { title: 'Accounts' },
-        data.accounts.map(a => h('div', { key: a.account_id, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
-          h('span', { style: { flex: 1 } }, h('span', { style: { fontWeight: 500 } }, a.name), h('span', { style: S.muted }, a.mask ? ` ••${a.mask}` : '')),
-          h('span', { style: S.muted }, `${a.institution || ''}${a.item_status && a.item_status !== 'ok' ? ' · needs reconnect' : ''}`),
-          h('span', { style: { minWidth: 90, textAlign: 'right' } }, money(a.current_cents)))))))
+        h(Stat, { label: 'Net worth', value: money(o.net_worth_cents, true),
+          sub: o.net_worth_change_30d_cents != null ? `${signed(o.net_worth_change_30d_cents)} in 30 days` : `Cash ${money(o.cash_cents, true)}` }),
+        h(Stat, { label: 'Investments', value: money(o.investments_cents, true),
+          sub: data.investments.gain_cents != null ? `${signed(data.investments.gain_cents)} vs cost` : 'Brokerage and retirement' })),
+      h(Tabs, { value: tab, onChange: setTab, items: [['overview', 'Overview'], ['wealth', 'Net worth'], ['goals', `Goals${data.goals.length ? ` (${data.goals.length})` : ''}`], ['activity', 'Transactions']] }),
+      tab === 'overview' && h(React.Fragment, null,
+        h(Alerts, { alerts: data.alerts, act, showTxns }),
+        h('div', { style: S.grid(420) },
+          h(Budgets, { budgets: b, act, busy }),
+          h(Card, { title: 'This month vs last' },
+            h(PaceChart, { pace: data.pace, budget: b.total_budget_cents }),
+            h('div', { style: { ...S.row, ...S.muted, fontSize: 12, marginTop: 6 } },
+              h('span', { style: { color: V.accent } }, '━'), ' This month', h('span', { style: { color: V.faint, marginLeft: 10 } }, '━'), ' Last month'))),
+        h('div', { style: S.grid(420) },
+          h(Card, { title: 'Last six months' }, h(MonthsChart, { months: data.months }),
+            h('div', { style: { ...S.muted, fontSize: 12, marginTop: 6 } }, 'Bars show spending; green dots show income.')),
+          h(Card, { title: 'Bills and subscriptions' },
+            data.recurring.length ? data.recurring.map(r => h('div', { key: r.merchant, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
+              h('span', { style: { flex: 1, fontWeight: 500 } }, r.merchant),
+              h('span', { style: S.muted }, `${r.cadence} · next ${day(r.next_date)}`),
+              h('span', { style: { minWidth: 70, textAlign: 'right', color: r.last_cents > r.previous_cents ? V.yellow : 'inherit' } }, money(r.last_cents))))
+              : h('div', { style: S.muted }, 'None detected yet. Pocketbook needs three charges to spot a pattern.')))),
+      tab === 'wealth' && h(React.Fragment, null,
+        h(NetWorth, { nw: data.networth }),
+        h(Investments, { inv: data.investments })),
+      tab === 'goals' && h(Goals, { goals: data.goals, accounts: data.accounts, post, busy }),
+      tab === 'activity' && h(React.Fragment, null,
+        h(Transactions, { initial: data.recent, api, filter, clearFilter: () => setFilter(null), categories: data.categories, onChanged: load }),
+        h(Rules, { rules: data.rules, categories: data.categories, post, busy }),
+        h(Card, { title: 'Accounts' },
+          data.accounts.map(a => h('div', { key: a.account_id, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
+            h('span', { style: { flex: 1 } }, h('span', { style: { fontWeight: 500 } }, a.name), h('span', { style: S.muted }, a.mask ? ` ••${a.mask}` : '')),
+            h('span', { style: S.muted }, `${a.institution || ''}${a.item_status && a.item_status !== 'ok' ? ' · needs reconnect' : ''}`),
+            h('span', { style: { minWidth: 90, textAlign: 'right' } }, money(a.current_cents))))))))
 }
 
   window.__HERMES_PLUGINS__.register('pocketbook', FinanceApp)

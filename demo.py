@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from datetime import date, timedelta
 
+from . import wealth
 from .plaid import save_sync
 from .store import _lock, now_iso, set_meta
 
@@ -15,6 +16,24 @@ ACCOUNTS = [
      "subtype": "savings", "balances": {"current": 12400.00, "available": 12400.00}},
     {"account_id": "demo-credit", "name": "Rewards Visa", "mask": "1177", "type": "credit",
      "subtype": "credit card", "balances": {"current": 1236.18, "limit": 9000}},
+    {"account_id": "demo-brokerage", "name": "Brokerage", "mask": "5512", "type": "investment",
+     "subtype": "brokerage", "balances": {"current": 50532.08}},  # = sum of HOLDINGS
+    {"account_id": "demo-401k", "name": "401(k)", "mask": "0907", "type": "investment",
+     "subtype": "401k", "balances": {"current": 61831.04}},
+    {"account_id": "demo-student-loan", "name": "Student Loan", "mask": "3301", "type": "loan",
+     "subtype": "student", "balances": {"current": 18420.77}},
+]
+
+# ticker, name, type, account, quantity, price, cost basis
+HOLDINGS = [
+    ("VTI", "Vanguard Total Stock Market ETF", "etf", "demo-brokerage", 82, 291.40, 19120.00),
+    ("VXUS", "Vanguard Total International Stock ETF", "etf", "demo-brokerage", 140, 66.35, 8410.00),
+    ("AAPL", "Apple Inc.", "equity", "demo-brokerage", 25, 228.10, 4380.00),
+    ("NVDA", "NVIDIA Corp.", "equity", "demo-brokerage", 30, 140.25, 2950.00),
+    ("BND", "Vanguard Total Bond Market ETF", "etf", "demo-brokerage", 70, 72.80, 5260.00),
+    ("CASH", "Cash sweep", "cash", "demo-brokerage", 2342.28, 1.00, 2342.28),
+    ("FXAIX", "Fidelity 500 Index Fund", "mutual fund", "demo-401k", 228.4, 205.60, 39800.00),
+    ("FXNAX", "Fidelity U.S. Bond Index Fund", "mutual fund", "demo-401k", 1430, 10.40, 15200.00),
 ]
 
 # merchant, primary category, detailed, low, high
@@ -102,8 +121,42 @@ def load(conn, today: date) -> dict:
         conn.commit()
     tx = build(today)
     save_sync(conn, "demo", ACCOUNTS, tx, [], [], "demo")
+    wealth.save_holdings(
+        conn,
+        [{"account_id": acct, "security_id": f"demo-{t}", "quantity": q, "institution_value": round(q * p, 2),
+          "cost_basis": cost} for t, _, _, acct, q, p, cost in HOLDINGS],
+        [{"security_id": f"demo-{t}", "name": n, "ticker_symbol": t, "type": ty, "close_price": p}
+         for t, n, ty, _, _, p, _ in HOLDINGS])
+    _networth_history(conn, today)
+    wealth.add_goal(conn, "Emergency fund", 2000000, (today + timedelta(days=210)).isoformat(), "demo-savings")
+    with _lock, conn:  # pretend the goal started in spring so its pace is meaningful
+        conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE name = 'Emergency fund'",
+                     ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00",))
+    wealth.add_goal(conn, "Japan trip", 600000, (today + timedelta(days=150)).isoformat(), saved_cents=210000)
+    wealth.add_rule(conn, "Trader Joe", "GROCERIES")
+    wealth.add_rule(conn, "Whole Foods", "GROCERIES")
     set_meta(conn, "demo", "1")
     return {"transactions": len(tx), "accounts": len(ACCOUNTS)}
+
+
+def _networth_history(conn, today: date) -> None:
+    """Six months of daily net worth: markets drift up with noise, savings grow, the loan shrinks."""
+    rng = random.Random(11)
+    end = wealth.balances(conn)
+    days = 186
+    invest = end["investments_cents"]
+    with _lock, conn:
+        for i in range(days, -1, -1):
+            d = today - timedelta(days=i)
+            f = 1 - i / days
+            market = invest * (0.86 + 0.14 * f + rng.uniform(-0.012, 0.012) if i else 1)
+            cash = end["cash_cents"] - int((1 - f) * 650000) + rng.randint(-60000, 60000) if i else end["cash_cents"]
+            loans = end["loans_cents"] + int((1 - f) * 210000)
+            credit = end["credit_cents"] + (rng.randint(-40000, 40000) if i else 0)
+            conn.execute(
+                "INSERT OR REPLACE INTO networth(date, assets_cents, liabilities_cents, cash_cents, investments_cents,"
+                " credit_cents, loans_cents) VALUES(?,?,?,?,?,?,?)",
+                (d.isoformat(), int(market) + cash, loans + credit, cash, int(market), credit, loans))
 
 
 def charge(conn, merchant: str, amount: float, category: str, today: date) -> dict:
@@ -124,8 +177,12 @@ def clear(conn) -> None:
         conn.execute("DELETE FROM transactions WHERE item_id='demo'")
         conn.execute("DELETE FROM accounts WHERE item_id='demo'")
         conn.execute("DELETE FROM items WHERE item_id='demo'")
+        conn.execute("DELETE FROM holdings WHERE account_id LIKE 'demo-%'")
+        conn.execute("DELETE FROM securities WHERE security_id LIKE 'demo-%'")
+        conn.execute("DELETE FROM goals WHERE account_id LIKE 'demo-%' OR name IN ('Emergency fund', 'Japan trip')")
         if not conn.execute("SELECT 1 FROM items WHERE item_id != 'demo' LIMIT 1").fetchone():
-            conn.execute("DELETE FROM alerts")  # sample alerts and budgets only; real ones stay
-            conn.execute("DELETE FROM budgets")
+            # sample-only state; with a real bank connected these stay
+            for table in ("alerts", "budgets", "networth", "rules"):
+                conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM meta WHERE key='demo'")
         conn.commit()

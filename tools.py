@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from . import alerts, insights, service
+from . import alerts, insights, service, wealth
 from .plaid import PlaidError
 from .store import connect, dollars, today
 
@@ -185,6 +185,62 @@ def categorize(args):
     return _ok(updated=n, category=insights.label(cat))
 
 
+@_safe
+def networth(args):
+    conn = connect()
+    nw = wealth.networth(conn, today(), days=int(args.get("days") or 180))
+    hist = nw.pop("history")
+    step = max(1, len(hist) // 12)  # a dozen points is enough for the model; the chart shows the rest
+    nw["history"] = hist[::step] + ([hist[-1]] if hist and hist[-1] not in hist[::step] else [])
+    return _ok(**nw, note="Liabilities are amounts owed. Balances are as of the last sync.")
+
+
+@_safe
+def investments(args):
+    return _ok(**wealth.investments(connect()))
+
+
+@_safe
+def goals(args):
+    conn = connect()
+    action = args.get("action", "list")
+    if action != "list":
+        blocked = _no_cron(f"goals {action}")
+        if blocked:
+            return blocked
+    if action == "add":
+        wealth.add_goal(conn, args["name"], int(float(args["target"]) * 100), args.get("target_date"),
+                        args.get("account_id"), int(float(args.get("saved") or 0) * 100))
+    elif action == "update":
+        wealth.update_goal(conn, int(args["id"]), name=args.get("name"),
+                           target_cents=int(float(args["target"]) * 100) if args.get("target") else None,
+                           target_date=args.get("target_date"), account_id=args.get("account_id"),
+                           saved_cents=int(float(args["saved"]) * 100) if args.get("saved") is not None else None)
+    elif action == "remove":
+        wealth.remove_goal(conn, int(args["id"]))
+    return _ok(goals=wealth.goals(conn, today()))
+
+
+@_safe
+def rules(args):
+    conn = connect()
+    action = args.get("action", "list")
+    if action != "list":
+        blocked = _no_cron(f"rules {action}")
+        if blocked:
+            return blocked
+    if action == "add":
+        cat = insights.category_key(args["category"])
+        added = wealth.add_rule(
+            conn, args["match"], cat,
+            int(float(args["min_amount"]) * 100) if args.get("min_amount") is not None else None,
+            int(float(args["max_amount"]) * 100) if args.get("max_amount") is not None else None)
+        return _ok(added={**added, "category_label": insights.label(cat)}, rules=wealth.list_rules(conn))
+    if action == "remove":
+        wealth.remove_rule(conn, int(args["id"]))
+    return _ok(rules=wealth.list_rules(conn))
+
+
 # ---------- schemas ----------
 
 CATEGORIES = ", ".join(v for k, v in insights.LABELS.items())
@@ -229,8 +285,9 @@ TOOLS = [
       "include_dismissed": {"type": "boolean"}}),
     ("money_chart", chart, "📈",
      "Draw a PNG chart. spending: this month by category with budget marks. trend: monthly totals with income. "
-     "pace: this month's running total vs last month and budget. merchant: monthly spend at one merchant.",
-     {"kind": {"type": "string", "enum": ["spending", "trend", "pace", "merchant"]},
+     "pace: this month's running total vs last month and budget. merchant: monthly spend at one merchant. "
+     "networth: net worth over the past year. investments: allocation and largest holdings.",
+     {"kind": {"type": "string", "enum": ["spending", "trend", "pace", "merchant", "networth", "investments"]},
       "month": {"type": "string", "description": "YYYY-MM for spending"},
       "merchant": {"type": "string"}}),
     ("money_accounts", accounts, "🏦",
@@ -239,6 +296,27 @@ TOOLS = [
      "test_bank: add a Plaid sandbox bank (sandbox keys only). disconnect: remove a connection and its data.",
      {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect"]},
       "item_id": {"type": "string"}}),
+    ("money_networth", networth, "🏛️",
+     "Net worth now and over time: assets (cash, investments) minus liabilities (cards, loans), change over 30 days "
+     "and year to date, and every account's balance.",
+     {"days": {"type": "integer", "description": "History length, default 180"}}),
+    ("money_investments", investments, "📈",
+     "Investment holdings from brokerage and retirement accounts: value, cost basis, gain, allocation by asset type. "
+     "Describe; do not give buy or sell advice.", {}),
+    ("money_goals", goals, "🏁",
+     "Savings goals. list: progress, pace, and the monthly amount still needed. add: name, target (dollars), optional "
+     "target_date, and either account_id (progress follows that account's balance; get ids from money_accounts) or saved "
+     "(a manual amount). update: change fields by id, including saved for manual goals. remove: by id.",
+     {"action": {"type": "string", "enum": ["list", "add", "update", "remove"]},
+      "id": {"type": "integer"}, "name": {"type": "string"}, "target": {"type": "number"},
+      "target_date": DATE, "account_id": {"type": "string"}, "saved": {"type": "number"}}),
+    ("money_rules", rules, "🧭",
+     "Categorization rules: any transaction whose merchant or description contains `match` gets `category`, now and "
+     "for future syncs. Newer rules win. Categories can be standard ones or new names (e.g. Groceries, Kids), which then "
+     "work with budgets. Use for 'always put X in Y'. add/remove/list.",
+     {"action": {"type": "string", "enum": ["list", "add", "remove"]}, "id": {"type": "integer"},
+      "match": {"type": "string"}, "category": {"type": "string"},
+      "min_amount": {"type": "number"}, "max_amount": {"type": "number"}}),
     ("money_categorize", categorize, "🏷️",
      "Change a transaction's category when the user says it is wrong; optionally every charge from that merchant.",
      {"transaction_id": {"type": "string"}, "category": {"type": "string", "description": f"One of: {CATEGORIES}"},

@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, timedelta
 from statistics import median
 
-from . import insights
+from . import insights, wealth
 from .insights import CAT_SQL, FROM_SQL, SPEND_SQL, label
 from .store import _lock, fmt, now_iso
 
@@ -16,6 +16,7 @@ DEFAULTS = {
     "alert_unusual": True,
     "alert_subscriptions": True,
     "alert_bills": True,
+    "alert_goals": True,
     "large_purchase_dollars": 500,
     "quiet_hours": "22:00-08:00",
     "lookback_days": 7,
@@ -29,6 +30,7 @@ KIND_SETTING = {
     "new_merchant": "alert_unusual",
     "subscription": "alert_subscriptions",
     "bill": "alert_bills",
+    "goal": "alert_goals",
     "connection": None,  # always on: broken data makes every other number wrong
 }
 
@@ -137,6 +139,16 @@ def detect(conn, today: date, settings: dict) -> list[dict]:
                                   f"{b['label']} is {word} budget",
                                   f"{fmt(b['spent_cents'])} of {fmt(b['budget_cents'])} this month.{over}{left}"))
                 break
+
+    for g in wealth.goals(conn, today):
+        if g["status"] == "done":
+            out.append(_alert("goal", f"{g['id']}:done", "info", f"Goal reached: {g['name']}",
+                              f"{fmt(g['current_cents'])} of {fmt(g['target_cents'])}."))
+        elif g["status"] in ("behind", "overdue"):
+            out.append(_alert("goal", f"{g['id']}:behind:{today:%Y-%m}", "info", f"{g['name']} is behind",
+                              f"{fmt(g['current_cents'])} of {fmt(g['target_cents'])}; the pace to {date.fromisoformat(g['target_date']):%b %-d, %Y} "
+                              f"called for {fmt(g['expected_cents'])} by now. About {fmt(g['needed_per_month_cents'])}"
+                              f" a month gets it back on track."))
 
     for item in conn.execute("SELECT * FROM items WHERE status != 'ok'").fetchall():
         out.append(_alert("connection", f"{item['item_id']}:{item['error']}", "warn",

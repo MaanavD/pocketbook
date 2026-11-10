@@ -36,11 +36,11 @@ CARD_PAYMENT = "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"
 
 # Shared WHERE clause for "this row is spending". Refunds (negative amounts) net against spend.
 SPEND_SQL = (
-    "COALESCE(t.user_category, t.category, 'OTHER') NOT IN ('INCOME','TRANSFER_IN','TRANSFER_OUT')"
+    "COALESCE(t.user_category, t.rule_category, t.category, 'OTHER') NOT IN ('INCOME','TRANSFER_IN','TRANSFER_OUT')"
     " AND COALESCE(t.detailed, '') != 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'"
     " AND COALESCE(a.type, 'depository') IN ('depository', 'credit')"
 )
-CAT_SQL = "COALESCE(t.user_category, t.category, 'OTHER')"
+CAT_SQL = "COALESCE(t.user_category, t.rule_category, t.category, 'OTHER')"
 FROM_SQL = "FROM transactions t LEFT JOIN accounts a ON a.account_id = t.account_id"
 
 
@@ -326,9 +326,18 @@ def overview(conn, today: date) -> dict:
     status = budget_status(conn, today)
     open_alerts = conn.execute("SELECT COUNT(*) FROM alerts WHERE dismissed_at IS NULL").fetchone()[0]
     last_sync = conn.execute("SELECT MAX(last_sync) FROM items").fetchone()[0]
+    from . import wealth
+
+    nw = wealth.networth(conn, today, days=31)
     return {
         "today": today.isoformat(),
         "month": month,
+        "net_worth_cents": nw["net_cents"],
+        "net_worth_change_30d_cents": nw["change_30d_cents"],
+        "investments_cents": nw["investments_cents"],
+        "loans_cents": nw["loans_cents"],
+        "goals": [{k: g[k] for k in ("name", "pct", "status", "current_cents", "target_cents")}
+                  for g in wealth.goals(conn, today)],
         "spent_cents": total_spend(conn, start, end),
         "spent_same_point_last_month_cents": total_spend(conn, prev_start, same_day_prev),
         "income_cents": total_income(conn, start, end),
