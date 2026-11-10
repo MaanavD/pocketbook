@@ -236,7 +236,7 @@ function LineChart ({ n, series, guide, xTicks, tip, zero = true, height = 220 }
   const H = height, L = 4, R = 48, T = 10, B = 26
   const [hi, hover] = useHover(n, W, L, R)
   const vals = series.flatMap(s => s.values).concat(guide ? [guide.value] : [])
-  let lo = zero ? 0 : Math.min(...vals), top = Math.max(1, ...vals)
+  let lo = zero ? Math.min(0, ...vals) : Math.min(...vals), top = Math.max(1, ...vals)
   if (!zero) { const p = Math.max(5000, (top - lo) * 0.1); lo -= p; top += p }
   const ticks = niceTicks(lo, top)
   lo = ticks[0]; top = ticks[ticks.length - 1]
@@ -884,6 +884,7 @@ function FinanceApp () {
   const [notice, setNotice] = useState(null)
   const [filter, setFilter] = useState(null)
   const [tab, setTab] = useState('overview')
+  const [manageBanks, setManageBanks] = useState(false)
 
   const load = useCallback(() => api('/summary').then(d => { setData(d); setError(null) }).catch(e => setError(String(e && e.message || e))), [])
   useEffect(() => {
@@ -955,9 +956,10 @@ function FinanceApp () {
           o.demo && h(Chip, { tone: 'accent' }, 'Sample data'))),
       !empty && h('div', { className: 'pb-flex' },
         o.demo && h(Btn, { ghost: true, disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
+        !o.demo && h(Btn, { disabled: busy, onClick: () => setManageBanks(!manageBanks) }, manageBanks ? 'Close bank setup' : 'Manage banks'),
         h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Working…' : 'Sync now'))),
     notice && h('div', { className: `pb-notice${notice[1] ? ' err' : ''}` }, h('span', null, notice[0]), h(Btn, { small: true, ghost: true, onClick: () => setNotice(null) }, '✕')),
-    (empty || !data.setup.live_items) && !o.demo && h(Setup, { setup: data.setup, act, busy }),
+    (empty || !data.setup.live_items || manageBanks) && !o.demo && h(Setup, { setup: data.setup, act, busy }),
     !empty && h('nav', { className: 'pb-nav', role: 'tablist' },
       tabs.map(([k, l]) => h('button', { key: k, role: 'tab', 'aria-selected': tab === k, onClick: go(k) }, l))),
     empty ? null
