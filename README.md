@@ -28,7 +28,7 @@ All math runs in code. The model explains results; it never computes totals.
 4. Connect a bank from the Finance tab, by asking Hermes, or with `hermes pocketbook connect`. Plaid hosts the sign-in page, so no server or webhook is needed.
 5. For alerts, schedule the **Money alerts** blueprint (every two hours, 8am to 10pm) and, if you like, the **Weekly money digest** from `/blueprint` or the Cron page. Alerts need the gateway running.
 
-To try it without a bank: `hermes pocketbook demo` loads six months of sample data, clearly labeled. `hermes pocketbook charge "Delta Air Lines" 640 --category travel` adds a sample charge so you can watch an alert fire.
+To try it without a bank: `hermes pocketbook demo` loads six months of sample data, clearly labeled. Run `hermes pocketbook demo --clear` before you connect a real bank. `hermes pocketbook charge "Delta Air Lines" 640 --category travel` adds a sample charge so you can watch an alert fire.
 
 ## Commands
 
@@ -44,12 +44,15 @@ To try it without a bank: `hermes pocketbook demo` loads six months of sample da
 
 ## Data, network and secrets
 
-- **Stored locally**: accounts, transactions, budgets, alert history and Amazon order items in `<hermes home>/plugin-data/pocketbook/data.db`. Charts go to `plugin-data/pocketbook/charts/`.
+- **Stored locally**: accounts, transactions, budgets, alert history and Amazon order items in `<hermes home>/plugin-data/pocketbook/data.db`. Charts go to `plugin-data/pocketbook/charts/` and are deleted after a week. Pocketbook sets the folder to owner-only (`0700`) and the database to `0600`.
 - **Secrets**: your Plaid client ID and secret, and one access token per connected bank, are stored through Hermes's credential route (`.env`) and read with `agent.secret_scope.get_secret`. They never enter the database, prompts or logs.
 - **Network**: only Plaid (`sandbox.plaid.com` or `production.plaid.com`), when you connect, sync, or a scheduled check runs. Sync requests Transactions, plus Investments when you share a brokerage or retirement account. No telemetry, no update checks.
 - **Model**: when you ask about money, the numbers and transactions the tools return go to your configured model like any other tool result.
 - **Background work**: none on install. Syncing happens on request, from the tab, or from the alert blueprint you choose to schedule (at most once every 30 minutes by default).
-- **Writes in scheduled runs**: budget changes, recategorizing and bank connect/disconnect refuse to run inside cron jobs.
+- **Writes in scheduled runs**: budget, goal and rule changes, recategorizing, imports, dismissing alerts and bank connect/disconnect refuse to run inside cron jobs.
+- **Sample data stays separate**: it loads only into an empty Pocketbook, and you must remove it before you connect a bank or import a file.
+- **Imports**: `money_import` reads only `.csv` files up to 20 MB.
+- **Disconnecting**: the access token is deleted only after Plaid confirms the removal, so a failed disconnect can be retried.
 - Nothing moves money.
 
 ## Limits

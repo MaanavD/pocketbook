@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from datetime import date, datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from pathlib import Path
 
 PLUGIN_ID = "pocketbook"
 
@@ -83,24 +86,39 @@ _conns: dict[str, sqlite3.Connection] = {}
 
 
 def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Each schema step commits with its version bump or not at all, so a crash cannot leave half a step."""
     conn.row_factory = sqlite3.Row
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    for i, script in enumerate(_SCHEMA[version:], start=version + 1):
-        conn.executescript(script)
-        conn.execute(f"PRAGMA user_version = {i}")
-        conn.commit()
+    while (version := conn.execute("PRAGMA user_version").fetchone()[0]) < len(_SCHEMA):
+        try:
+            conn.executescript(f"BEGIN IMMEDIATE; {_SCHEMA[version]}; PRAGMA user_version = {version + 1}; COMMIT;")
+        except sqlite3.Error:
+            if conn.in_transaction:
+                conn.rollback()
+            if conn.execute("PRAGMA user_version").fetchone()[0] == version:
+                raise  # a real failure, not another process finishing this step first
     return conn
+
+
+def secure(folder: Path) -> None:
+    """Owner-only access to the data folder and database: it holds balances and every transaction."""
+    try:
+        os.chmod(folder, 0o700)
+        for f in folder.glob("data.db*"):
+            os.chmod(f, 0o600)
+    except OSError:
+        pass  # filesystems without POSIX modes
 
 
 def connect() -> sqlite3.Connection:
     """One connection per Hermes profile, opened through Hermes's plugin storage."""
     from hermes_constants import get_hermes_home
-    from plugins.plugin_storage import plugin_db
+    from plugins.plugin_storage import plugin_data_dir, plugin_db
 
     key = str(get_hermes_home())
     with _lock:
         if key not in _conns:
             _conns[key] = migrate(plugin_db(PLUGIN_ID))
+            secure(plugin_data_dir(PLUGIN_ID))
         return _conns[key]
 
 
@@ -128,7 +146,21 @@ def set_meta(conn, key, value):
 
 
 def cents(dollars) -> int:
-    return int(round(float(dollars) * 100))
+    """Dollars to whole cents, rounded half up on the decimal value: 19.99 is 1999, never 1998."""
+    try:
+        d = Decimal(str(dollars).strip())
+    except InvalidOperation:
+        raise ValueError(f"not an amount: {dollars!r}") from None
+    if not d.is_finite() or abs(d) > 10 ** 12:
+        raise ValueError(f"not an amount: {dollars!r}")
+    return int((d * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def require_no_demo(conn) -> None:
+    """Sample and real data never share a database: clearing samples could not tell them apart."""
+    if conn.execute("SELECT 1 FROM items WHERE item_id = 'demo'").fetchone():
+        raise ValueError("Sample data is loaded. Remove it first (`hermes pocketbook demo --clear`, or "
+                         "Remove sample data in the Finance tab) so it never mixes with real accounts.")
 
 
 def dollars(c) -> float:

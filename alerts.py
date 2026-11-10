@@ -179,8 +179,11 @@ def in_quiet_hours(spec: str, now: datetime) -> bool:
     if not spec or "-" not in spec:
         return False
     start_s, end_s = spec.split("-", 1)
-    start = datetime.strptime(start_s.strip(), "%H:%M").time()
-    end = datetime.strptime(end_s.strip(), "%H:%M").time()
+    try:
+        start = datetime.strptime(start_s.strip(), "%H:%M").time()
+        end = datetime.strptime(end_s.strip(), "%H:%M").time()
+    except ValueError:
+        return False  # a mistyped setting must not stop every alert check; send rather than hold
     t = now.time()
     return start <= t < end if start < end else t >= start or t < end
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import math
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 from . import purchases
 from .insights import category_key
 from .plaid import save_sync
-from .store import _lock, now_iso
+from .store import _lock, now_iso, require_no_demo
 
 DATE = ("date", "transaction date", "posted date", "post date", "posting date", "original date")
 DESC = ("merchant", "payee", "custom name", "name", "description", "original statement", "original description", "memo")
@@ -49,6 +50,8 @@ CATEGORY_MAP = {
     "fees & charges": "BANK_FEES", "service charges": "BANK_FEES",
     "uncategorized": "OTHER", "miscellaneous": "OTHER", "other": "OTHER",
 }
+FORMATS = ("amazon", "monarch", "mint", "ynab", "rocket money", "copilot", "bank")
+MAX_BYTES = 20 * 1024 * 1024  # years of exports are a few MB; this stops a wrong path from filling memory
 CREDIT_HINT = re.compile(r"card|visa|amex|american express|mastercard|discover|credit|sapphire|freedom", re.I)
 
 
@@ -69,13 +72,18 @@ def _money(v) -> float | None:
         x = float(s.strip("()"))
     except ValueError:
         return None
+    if not math.isfinite(x):  # float() accepts "nan" and "inf"
+        return None
     return -x if neg else x
 
 
 def _date(v) -> str | None:
     s = str(v or "").strip()
     if re.match(r"\d{4}-\d{2}-\d{2}", s):
-        return s[:10]
+        try:  # 2026-13-45 has the right shape; stored, it would break every later date calculation
+            return date.fromisoformat(s[:10]).isoformat()
+        except ValueError:
+            return None
     for f in ("%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%d %b %Y", "%b %d, %Y", "%B %d, %Y", "%d-%b-%Y"):
         try:
             return datetime.strptime(s, f).date().isoformat()
@@ -114,8 +122,13 @@ def read(text: str) -> tuple[str, list[dict], dict[str, str]]:
 
 
 def import_text(conn, text: str, name: str = "import.csv", fmt: str | None = None) -> dict:
+    require_no_demo(conn)
+    if len(text) > MAX_BYTES:
+        raise ValueError("That file is over 20 MB. Split it by year and import the parts.")
     detected, rows, headers = read(text)
-    fmt = fmt or detected
+    fmt = (fmt or "").strip().lower() or detected
+    if fmt not in FORMATS:
+        raise ValueError(f"Unknown format {fmt!r}; use one of {', '.join(FORMATS)}.")
     if fmt == "amazon":
         return {"format": "amazon", **_amazon(conn, rows, headers)}
     return {"format": fmt, **_transactions(conn, rows, headers, fmt, name)}
@@ -123,6 +136,13 @@ def import_text(conn, text: str, name: str = "import.csv", fmt: str | None = Non
 
 def import_path(conn, path: str, fmt: str | None = None) -> dict:
     p = Path(path).expanduser()
+    # The model picks this path. Only read what is plainly a CSV export, never devices, pipes or other files.
+    if p.suffix.lower() != ".csv":
+        raise ValueError("Only .csv files can be imported.")
+    if not p.is_file():
+        raise ValueError(f"No file at {p}.")
+    if p.stat().st_size > MAX_BYTES:
+        raise ValueError("That file is over 20 MB. Split it by year and import the parts.")
     return import_text(conn, p.read_text(encoding="utf-8-sig", errors="replace"), p.name, fmt)
 
 
@@ -229,11 +249,16 @@ def _category(name, amt) -> tuple[str, str | None]:
 
 
 def remove(conn, source: str) -> int:
+    """Delete one import: a transaction source like 'monarch', or 'amazon' for imported order items."""
+    source = re.sub(r"[^a-z]+", "-", str(source).lower().removeprefix("import-")).strip("-")
     item_id = f"import-{source}"
     with _lock, conn:
+        if source == "amazon":
+            return conn.execute("DELETE FROM purchases WHERE source = 'amazon' AND order_id NOT LIKE 'demo-%'").rowcount
         n = conn.execute("DELETE FROM transactions WHERE item_id=?", (item_id,)).rowcount
         conn.execute("DELETE FROM accounts WHERE item_id=?", (item_id,))
         conn.execute("DELETE FROM items WHERE item_id=?", (item_id,))
+        conn.execute("UPDATE purchases SET txn_id = NULL WHERE txn_id NOT IN (SELECT id FROM transactions)")
     return n
 
 

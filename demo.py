@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import random
 from datetime import date, timedelta
 
 from . import purchases, wealth
 from .plaid import save_sync
-from .store import _lock, now_iso, set_meta
+from .store import _lock, get_meta, now_iso, set_meta
 
 ACCOUNTS = [
     {"account_id": "demo-checking", "name": "Everyday Checking", "mask": "4021", "type": "depository",
@@ -152,6 +153,15 @@ def amazon_orders(today: date) -> list[dict]:
 
 
 def load(conn, today: date) -> dict:
+    # Samples add six months of invented net worth, rules and budgets; over real data those could not be undone.
+    if (conn.execute("SELECT 1 FROM items WHERE item_id != 'demo' LIMIT 1").fetchone()
+            or conn.execute("SELECT 1 FROM purchases WHERE order_id NOT LIKE 'demo-%' LIMIT 1").fetchone()):
+        raise ValueError("Sample data only loads into an empty Pocketbook. You already have accounts, imports "
+                         "or purchases here.")
+    has_samples = conn.execute("SELECT 1 FROM items WHERE item_id='demo'").fetchone()
+    if not has_samples and any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                               for table in ("goals", "budgets", "rules", "products", "networth", "alerts")):
+        raise ValueError("Sample data only loads into an empty Pocketbook. You already have saved settings or history.")
     clear(conn)
     with _lock:
         conn.execute(
@@ -167,11 +177,12 @@ def load(conn, today: date) -> dict:
         [{"security_id": f"demo-{t}", "name": n, "ticker_symbol": t, "type": ty, "close_price": p}
          for t, n, ty, _, _, p, _ in HOLDINGS])
     _networth_history(conn, today)
-    wealth.add_goal(conn, "Emergency fund", 2000000, (today + timedelta(days=210)).isoformat(), "demo-savings")
+    fund = wealth.add_goal(conn, "Emergency fund", 2000000, (today + timedelta(days=210)).isoformat(), "demo-savings")
     with _lock, conn:  # pretend the goal started in spring so its pace is meaningful
-        conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE name = 'Emergency fund'",
-                     ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00",))
-    wealth.add_goal(conn, "Japan trip", 600000, (today + timedelta(days=150)).isoformat(), saved_cents=210000)
+        conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE id = ?",
+                     ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00", fund["id"]))
+    trip = wealth.add_goal(conn, "Japan trip", 600000, (today + timedelta(days=150)).isoformat(), saved_cents=210000)
+    set_meta(conn, "demo_goals", json.dumps([fund["id"], trip["id"]]))  # so clear() removes these and no others
     purchases.add_orders(conn, amazon_orders(today))
     purchases.set_lifespan(conn, purchases.product_key("Philips Sonicare Replacement Brush Heads, 4 Pack"), 360, "hermes")
     purchases.set_lifespan(conn, purchases.product_key("Brooks Ghost 16 Running Shoes"), 300, "you")
@@ -215,17 +226,25 @@ def charge(conn, merchant: str, amount: float, category: str, today: date) -> di
 
 
 def clear(conn) -> None:
-    with _lock:
+    """Remove sample rows only. A goal the user named "Emergency fund" is theirs and stays."""
+    if not conn.execute("SELECT 1 FROM items WHERE item_id='demo'").fetchone() and get_meta(conn, "demo") != "1":
+        return  # no samples here: never touch budgets, rules or alerts
+    goal_ids = get_meta(conn, "demo_goals")
+    with _lock, conn:
         conn.execute("DELETE FROM transactions WHERE item_id='demo'")
         conn.execute("DELETE FROM accounts WHERE item_id='demo'")
         conn.execute("DELETE FROM items WHERE item_id='demo'")
         conn.execute("DELETE FROM holdings WHERE account_id LIKE 'demo-%'")
         conn.execute("DELETE FROM securities WHERE security_id LIKE 'demo-%'")
         conn.execute("DELETE FROM purchases WHERE order_id LIKE 'demo-%'")
-        conn.execute("DELETE FROM goals WHERE account_id LIKE 'demo-%' OR name IN ('Emergency fund', 'Japan trip')")
-        if not conn.execute("SELECT 1 FROM items WHERE item_id != 'demo' LIMIT 1").fetchone():
-            # sample-only state; with a real bank connected these stay
-            for table in ("alerts", "budgets", "networth", "rules", "products"):
+        conn.execute("DELETE FROM goals WHERE account_id LIKE 'demo-%'")
+        if goal_ids is not None:
+            conn.executemany("DELETE FROM goals WHERE id = ?", [(int(i),) for i in json.loads(goal_ids)])
+        else:  # samples loaded before ids were recorded: match the sample goal exactly, not just its name
+            conn.execute("DELETE FROM goals WHERE name = 'Japan trip' AND account_id IS NULL AND target_cents = 600000")
+        if not (conn.execute("SELECT 1 FROM items LIMIT 1").fetchone()
+                or conn.execute("SELECT 1 FROM purchases LIMIT 1").fetchone()):
+            # sample-only state; with real data present these stay
+            for table in ("alerts", "networth", "rules", "products"):
                 conn.execute(f"DELETE FROM {table}")
-        conn.execute("DELETE FROM meta WHERE key='demo'")
-        conn.commit()
+        conn.execute("DELETE FROM meta WHERE key IN ('demo', 'demo_goals')")

@@ -47,6 +47,14 @@ async def _run(fn, *args):
         raise HTTPException(400, str(e)) from None
 
 
+def _cents(v):
+    """Dollars from a request body to cents; a bad number is a 400, not a stored wrong amount."""
+    try:
+        return None if v is None else store.cents(v)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 def _summary():
     conn = store.connect()
     t = store.today()
@@ -111,7 +119,7 @@ async def transactions(query: str = "", category: str = "", start: str = "", end
     def go():
         return insights.find_transactions(
             store.connect(), query=query or None, category=category or None, start=start or None,
-            end=end or None, ids=[i for i in ids.split(",") if i] or None, limit=min(limit, 500))
+            end=end or None, ids=[i for i in ids.split(",") if i][:500] or None, limit=max(1, min(limit, 500)))
     return {"transactions": await _run(go)}
 
 
@@ -135,8 +143,7 @@ async def approve(body: BudgetBody):
 async def set_budget(body: BudgetBody):
     if not body.category:
         raise HTTPException(400, "category required")
-    cents = int(round(body.amount * 100)) if body.amount else None
-    await _run(insights.set_budget, store.connect(), body.category, cents)
+    await _run(insights.set_budget, store.connect(), body.category, _cents(body.amount) if body.amount else None)
     return {"ok": True}
 
 
@@ -196,7 +203,7 @@ class GoalBody(BaseModel):
 async def goals(body: GoalBody):
     def go():
         conn = store.connect()
-        c = lambda v: None if v is None else int(round(v * 100))
+        c = _cents
         if body.action == "add":
             wealth.add_goal(conn, body.name or "Goal", c(body.target) or 0, body.target_date or None,
                             body.account_id or None, c(body.saved) or 0)
