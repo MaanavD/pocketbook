@@ -129,8 +129,8 @@ def merchant(conn, today: date, out: Path, name: str, months: int = 12) -> Path:
     since = insights.add_months(today.replace(day=1), -(months - 1))
     rows = conn.execute(
         f"SELECT substr(t.date, 1, 7) AS m, SUM(t.amount_cents) AS c, COUNT(*) AS n, MAX(COALESCE(t.merchant, t.name)) AS label"
-        f" {FROM_SQL} WHERE {SPEND_SQL} AND COALESCE(t.merchant, t.name) LIKE ? AND t.date >= ? GROUP BY m ORDER BY m",
-        (f"%{name}%", since.isoformat()),
+        f" {FROM_SQL} WHERE {SPEND_SQL} AND instr(LOWER(COALESCE(t.merchant, t.name)), LOWER(?)) > 0 AND t.date >= ? GROUP BY m ORDER BY m",
+        (name, since.isoformat()),
     ).fetchall()
     by_month = {r["m"]: r["c"] for r in rows}
     label = rows[-1]["label"] if rows else name

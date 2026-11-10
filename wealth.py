@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from .store import _lock, now_iso
+from .connections import scope_key
 
 ASSET_TYPES = ("depository", "investment", "brokerage", "other")
 LIABILITY_TYPES = ("credit", "loan")
@@ -18,9 +19,9 @@ def apply_rules(conn) -> None:
     with _lock, conn:
         conn.execute("UPDATE transactions SET rule_category = NULL WHERE rule_category IS NOT NULL")
         for r in rules:
-            sql = ("UPDATE transactions SET rule_category = ? WHERE (LOWER(COALESCE(merchant, '')) LIKE ?"
-                   " OR LOWER(COALESCE(name, '')) LIKE ?)")
-            args: list = [r["category"], f"%{r['pattern'].lower()}%", f"%{r['pattern'].lower()}%"]
+            sql = ("UPDATE transactions SET rule_category = ? WHERE (instr(LOWER(COALESCE(merchant, '')), LOWER(?)) > 0"
+                   " OR instr(LOWER(COALESCE(name, '')), LOWER(?)) > 0)")
+            args: list = [r["category"], r["pattern"], r["pattern"]]
             if r["min_cents"] is not None:
                 sql += " AND amount_cents >= ?"
                 args.append(r["min_cents"])
@@ -54,9 +55,9 @@ def list_rules(conn) -> list[dict]:
 
     out = []
     for r in conn.execute("SELECT * FROM rules ORDER BY id DESC").fetchall():
-        n = conn.execute("SELECT COUNT(*) FROM transactions WHERE LOWER(COALESCE(merchant, '')) LIKE ?"
-                         " OR LOWER(COALESCE(name, '')) LIKE ?",
-                         (f"%{r['pattern'].lower()}%",) * 2).fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM transactions WHERE instr(LOWER(COALESCE(merchant, '')), LOWER(?)) > 0"
+                         " OR instr(LOWER(COALESCE(name, '')), LOWER(?)) > 0",
+                         (r["pattern"],) * 2).fetchone()[0]
         out.append({"id": r["id"], "pattern": r["pattern"], "category": r["category"],
                     "category_label": label(r["category"]), "min_cents": r["min_cents"],
                     "max_cents": r["max_cents"], "matches": n})
@@ -66,7 +67,7 @@ def list_rules(conn) -> list[dict]:
 # ---------- net worth ----------
 
 def balances(conn) -> dict:
-    rows = conn.execute("SELECT type, COALESCE(SUM(current_cents), 0) FROM accounts GROUP BY type").fetchall()
+    rows = conn.execute("SELECT type, COALESCE(SUM(current_cents), 0) FROM balance_accounts GROUP BY type").fetchall()
     by = {r[0] or "other": r[1] for r in rows}
     cash = by.get("depository", 0)
     invest = by.get("investment", 0) + by.get("brokerage", 0)
@@ -84,32 +85,33 @@ def snapshot(conn, day: date) -> None:
     with _lock, conn:
         conn.execute(
             "INSERT OR REPLACE INTO networth(date, assets_cents, liabilities_cents, cash_cents, investments_cents,"
-            " credit_cents, loans_cents) VALUES(?,?,?,?,?,?,?)",
+            " credit_cents, loans_cents, scope) VALUES(?,?,?,?,?,?,?,?)",
             (day.isoformat(), b["assets_cents"], b["liabilities_cents"], b["cash_cents"], b["investments_cents"],
-             b["credit_cents"], b["loans_cents"]))
+             b["credit_cents"], b["loans_cents"], scope_key(conn)))
 
 
 def networth(conn, today: date, days: int = 365) -> dict:
     b = balances(conn)
     net = b["assets_cents"] - b["liabilities_cents"]
     hist = [dict(r) for r in conn.execute(
-        "SELECT date, assets_cents, liabilities_cents FROM networth WHERE date >= ? ORDER BY date",
-        ((today - timedelta(days=days)).isoformat(),)).fetchall()]
+        "SELECT date, assets_cents, liabilities_cents FROM networth WHERE date BETWEEN ? AND ? AND scope = ? ORDER BY date",
+        ((today - timedelta(days=days)).isoformat(), today.isoformat(), scope_key(conn))).fetchall()]
     for h in hist:
         h["net_cents"] = h["assets_cents"] - h["liabilities_cents"]
 
     def change_since(d: date):
-        past = conn.execute("SELECT assets_cents - liabilities_cents FROM networth WHERE date <= ?"
-                            " ORDER BY date DESC LIMIT 1", (d.isoformat(),)).fetchone()
+        past = conn.execute("SELECT assets_cents - liabilities_cents FROM networth WHERE date <= ? AND scope = ?"
+                            " ORDER BY date DESC LIMIT 1", (d.isoformat(), scope_key(conn))).fetchone()
         return None if past is None else net - past[0]
 
     accts = [dict(r) for r in conn.execute(
-        "SELECT account_id, name, mask, type, subtype, current_cents FROM accounts ORDER BY type, current_cents DESC")]
+        "SELECT account_id, name, mask, type, subtype, current_cents FROM balance_accounts ORDER BY type, current_cents DESC")]
     return {
         "net_cents": net, **b,
         "change_30d_cents": change_since(today - timedelta(days=30)),
         "change_ytd_cents": change_since(date(today.year, 1, 1)),
         "history": hist,
+        "history_note": "History begins with this bank and account selection. Older snapshots are kept separately because they may include other accounts.",
         "accounts": [{**a, "side": "liability" if a["type"] in LIABILITY_TYPES else "asset"} for a in accts],
     }
 
@@ -148,7 +150,7 @@ def investments(conn) -> dict:
     rows = [dict(r) for r in conn.execute(
         "SELECT h.*, s.name, s.ticker, s.type AS sec_type, a.name AS account FROM holdings h"
         " LEFT JOIN securities s ON s.security_id = h.security_id"
-        " LEFT JOIN accounts a ON a.account_id = h.account_id ORDER BY h.value_cents DESC")]
+        " JOIN balance_accounts a ON a.account_id = h.account_id ORDER BY h.value_cents DESC")]
     total = sum(r["value_cents"] or 0 for r in rows)
     with_cost = [r for r in rows if r["cost_cents"] is not None and r["value_cents"] is not None]
     cost = sum(r["cost_cents"] for r in with_cost)
@@ -158,7 +160,7 @@ def investments(conn) -> dict:
         key = TYPE_LABELS.get(r["sec_type"] or "other", (r["sec_type"] or "Other").title())
         alloc[key] = alloc.get(key, 0) + (r["value_cents"] or 0)
     accounts_without = [dict(r) for r in conn.execute(
-        "SELECT name, current_cents FROM accounts WHERE type IN ('investment', 'brokerage')"
+        "SELECT name, current_cents FROM balance_accounts WHERE type IN ('investment', 'brokerage')"
         " AND account_id NOT IN (SELECT account_id FROM holdings)")]
     return {
         "total_cents": total,
@@ -229,14 +231,16 @@ def goals(conn, today: date) -> list[dict]:
     out = []
     for g in conn.execute(
             "SELECT g.*, a.current_cents, a.name AS account FROM goals g"
-            " LEFT JOIN accounts a ON a.account_id = g.account_id ORDER BY g.target_date IS NULL, g.target_date, g.id"):
+            " LEFT JOIN balance_accounts a ON a.account_id = g.account_id ORDER BY g.target_date IS NULL, g.target_date, g.id"):
         current = (g["current_cents"] or 0) if g["account_id"] else g["saved_cents"]
         target = g["target_cents"]
         item = {"id": g["id"], "name": g["name"], "target_cents": target, "current_cents": current,
                 "remaining_cents": max(0, target - current), "pct": min(100, round(100 * current / target)),
                 "target_date": g["target_date"], "account": g["account"], "account_id": g["account_id"],
                 "tracking": "account balance" if g["account_id"] else "manual"}
-        if current >= target:
+        if g["account_id"] and g["account"] is None:
+            item["status"] = "paused"
+        elif current >= target:
             item["status"] = "done"
         elif g["target_date"]:
             end = date.fromisoformat(g["target_date"])

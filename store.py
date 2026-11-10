@@ -79,6 +79,37 @@ _SCHEMA = [
         key TEXT PRIMARY KEY, lifespan_days INTEGER, lifespan_source TEXT, hidden INTEGER NOT NULL DEFAULT 0
     );
     """,
+    # v4: reversible account controls and environment-scoped views/history
+    """
+    ALTER TABLE items ADD COLUMN environment TEXT;
+    ALTER TABLE items ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE accounts ADD COLUMN custom_name TEXT;
+    ALTER TABLE accounts ADD COLUMN include_spending INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE accounts ADD COLUMN include_networth INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE accounts ADD COLUMN closed INTEGER NOT NULL DEFAULT 0;
+    CREATE VIEW active_items AS SELECT * FROM items WHERE enabled = 1 AND
+      (token_env IS NULL OR environment IS NULL OR environment =
+       COALESCE((SELECT value FROM meta WHERE key='active_plaid_env'), environment));
+    CREATE VIEW active_accounts AS SELECT a.account_id, a.item_id,
+      COALESCE(NULLIF(a.custom_name, ''), a.name) AS name, a.name AS source_name,
+      a.custom_name, a.mask, a.type, a.subtype, a.current_cents, a.available_cents,
+      a.limit_cents, a.currency, a.updated_at, a.include_spending, a.include_networth, a.closed
+      FROM accounts a LEFT JOIN items i ON i.item_id = a.item_id
+      WHERE (i.item_id IS NULL OR i.item_id IN (SELECT item_id FROM active_items))
+        AND COALESCE(a.currency, 'USD') = 'USD';
+    CREATE VIEW spending_accounts AS SELECT * FROM active_accounts WHERE include_spending = 1;
+    CREATE VIEW balance_accounts AS SELECT * FROM active_accounts WHERE include_networth = 1 AND closed = 0;
+    ALTER TABLE networth RENAME TO networth_legacy;
+    CREATE TABLE networth (
+      date TEXT NOT NULL, assets_cents INTEGER NOT NULL, liabilities_cents INTEGER NOT NULL,
+      cash_cents INTEGER, investments_cents INTEGER, credit_cents INTEGER, loans_cents INTEGER,
+      scope TEXT NOT NULL DEFAULT '', PRIMARY KEY(date, scope)
+    );
+    INSERT INTO networth SELECT date, assets_cents, liabilities_cents, cash_cents,
+      investments_cents, credit_cents, loans_cents, '' FROM networth_legacy;
+    DROP TABLE networth_legacy;
+    """,
+
 ]
 
 _lock = threading.RLock()

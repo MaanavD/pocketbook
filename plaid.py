@@ -5,14 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from .store import _lock, cents, get_meta, now_iso, require_no_demo, set_meta
 from .wealth import apply_rules, save_holdings, snapshot
+from . import connections
+
+_link_lock = threading.RLock()
 
 HOSTS = {"sandbox": "https://sandbox.plaid.com", "production": "https://production.plaid.com"}
 CLIENT_ID_ENV = "POCKETBOOK_PLAID_CLIENT_ID"
@@ -20,7 +24,7 @@ SECRET_ENV = "POCKETBOOK_PLAID_SECRET"
 # Reads that are safe to repeat. Token exchange, link creation and item removal are sent once.
 RETRY_SAFE = ("/transactions/sync", "/accounts/get", "/investments/holdings/get", "/link/token/get")
 RETRY_HTTP = (429, 500, 502, 503, 504)
-GONE = ("ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN")  # Plaid no longer has the item
+GONE = ("ITEM_NOT_FOUND",)  # an invalid token can also mean the wrong keys/environment
 
 
 class PlaidError(RuntimeError):
@@ -85,11 +89,17 @@ class Plaid:
 
     # ---------- linking ----------
 
-    def start_link(self, conn) -> dict:
+    def start_link(self, conn, item_id=None) -> dict:
+        with _link_lock:
+            return self._start_link(conn, item_id)
+
+    def _start_link(self, conn, item_id=None) -> dict:
         """Hosted Link: Plaid hosts the bank sign-in page, so no web server is needed."""
         require_no_demo(conn)
+        if get_meta(conn, "pending_link_token"):
+            raise PlaidError("LINK_IN_PROGRESS", "A bank sign-in is already in progress. Finish it or cancel it in Finance before starting another.")
         user = hashlib.sha256((self.client_id or "").encode()).hexdigest()[:16]
-        res = self.call("/link/token/create", {
+        body = {
             "client_name": "Pocketbook for Hermes",
             "user": {"client_user_id": f"pocketbook-{user}"},
             "products": ["transactions"],
@@ -98,28 +108,85 @@ class Plaid:
             "country_codes": ["US"],
             "language": "en",
             "hosted_link": {},
-        })
+        }
+        if item_id:
+            connections.prepare(conn, self.env, self.secrets["get"])
+            item = conn.execute("SELECT * FROM items WHERE item_id=?", (item_id,)).fetchone()
+            if not item or not item["token_env"]:
+                raise PlaidError("NOT_FOUND", "This bank connection cannot be repaired. Connect a bank instead.")
+            if item["environment"] and item["environment"] != self.env:
+                raise PlaidError("WRONG_ENVIRONMENT", "Switch to this bank's environment before repairing its sign-in.")
+            token = self.secrets["get"](item["token_env"])
+            if not token:
+                raise PlaidError("TOKEN_MISSING", "This bank's access token is missing. Restore its Hermes credentials or connect it again.")
+            for field in ("products", "optional_products", "transactions"):
+                body.pop(field, None)
+            body["access_token"] = token
+        res = self.call("/link/token/create", body)
         url = str(res.get("hosted_link_url") or "")
         host = urllib.parse.urlsplit(url).hostname or ""
         if not url.startswith("https://") or not (host == "plaid.com" or host.endswith(".plaid.com")):
             raise PlaidError("BAD_LINK", "Plaid did not return a sign-in link on plaid.com.")  # we open this URL
-        set_meta(conn, "pending_link_token", res["link_token"])
+        with _lock, conn:
+            conn.executemany("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", [
+                ("pending_link_item", item_id or ""), ("pending_link_token", res["link_token"]),
+                ("pending_link_environment", self.env), ("pending_link_url", url),
+                ("pending_link_expires", res.get("expiration") or "")])
         return {"url": url, "expires": res.get("expiration")}
 
     def finish_link(self, conn) -> list[dict]:
+        with _link_lock:
+            return self._finish_link(conn)
+
+    def _finish_link(self, conn) -> list[dict]:
+        self.link_warnings = []
         token = get_meta(conn, "pending_link_token")
         if not token:
             raise PlaidError("NO_LINK", "No bank connection is in progress. Start one first.")
+        environment = get_meta(conn, "pending_link_environment") or connections.token_environment(token)
+        if environment and environment != self.env:
+            raise PlaidError("LINK_ENVIRONMENT_CHANGED", "This sign-in was started in a different environment. Cancel it and start a new connection.")
+        expiration = get_meta(conn, "pending_link_expires")
+        if expiration:
+            try:
+                stamp = datetime.fromisoformat(expiration.replace("Z", "+00:00"))
+                expired = stamp.replace(tzinfo=stamp.tzinfo or timezone.utc) < datetime.now(timezone.utc)
+            except ValueError:
+                expired = False
+            if expired:
+                raise PlaidError("LINK_EXPIRED", "This bank sign-in has expired. Start a new connection.")
         res = self.call("/link/token/get", {"link_token": token})
+        repair_item = get_meta(conn, "pending_link_item")
+        if repair_item and any(session.get("on_success") or
+                               any(result.get("public_token") for result in (session.get("results") or {}).get("item_add_results") or [])
+                               for session in res.get("link_sessions") or []):
+            item = conn.execute("SELECT institution FROM items WHERE item_id=?", (repair_item,)).fetchone()
+            if not item:
+                raise PlaidError("NOT_FOUND", "The original bank connection no longer exists. Start a new connection.")
+            with _lock, conn:
+                conn.execute("UPDATE items SET status='ok',error=NULL WHERE item_id=?", (repair_item,))
+            self.cancel_link(conn)
+            return [{"item_id": repair_item, "institution": item["institution"], "repaired": True}]
         publics = []
         for session in res.get("link_sessions") or []:
             results = session.get("results") or {}
             for add in results.get("item_add_results") or []:
-                publics.append((add.get("public_token"), (add.get("institution") or {}).get("name")))
+                if add.get("public_token"):
+                    publics.append((add["public_token"], (add.get("institution") or {}).get("name")))
             done = session.get("on_success") or {}
             if done.get("public_token"):
-                publics.append((done["public_token"], (done.get("metadata") or {}).get("institution", {}).get("name")))
+                publics.append((done["public_token"], ((done.get("metadata") or {}).get("institution") or {}).get("name")))
         if not publics:
+            sessions = res.get("link_sessions") or []
+            if sessions:
+                # An old exited attempt must not stop a later reopened sign-in.
+                session = max(enumerate(sessions), key=lambda pair: (pair[1].get("started_at") or "", pair[0]))[1]
+                exit_info = session.get("exit") if session.get("exit") is not None else session.get("on_exit")
+                if session.get("finished_at") and exit_info is not None:
+                    reason = exit_info.get("error")
+                    if reason:
+                        raise PlaidError("LINK_FAILED", "The bank sign-in did not finish. Reopen the sign-in or start a new connection.")
+                    raise PlaidError("LINK_CANCELLED", "Bank sign-in was closed without connecting an account. Start a new connection when ready.")
             raise PlaidError("LINK_PENDING", "Plaid has not reported a finished connection yet. Finish signing in, then try again.")
         # A public token is spent once exchanged. If one of several fails, keep the banks that worked
         # and close the session; retrying it would fail on the tokens already used.
@@ -131,8 +198,21 @@ class Plaid:
                 failed.append(e)
         if not added:
             raise failed[0]
-        set_meta(conn, "pending_link_token", "")
+        self.link_warnings = [f"Another bank did not finish connecting ({error.code}). Start a new sign-in for that bank." for error in failed]
+        self.cancel_link(conn)
         return added
+
+    def cancel_link(self, conn):
+        with _link_lock, _lock, conn:
+            conn.execute("DELETE FROM meta WHERE key GLOB 'pending_link_*'")
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('pending_link_token','')")
+        return {"status": "cancelled", "message": "Pocketbook stopped checking this sign-in. Close the Plaid browser tab too. Existing banks are unchanged."}
+
+    def link_status(self, conn):
+        if not get_meta(conn, "pending_link_token"):
+            return None
+        return {"url": get_meta(conn, "pending_link_url"), "expires": get_meta(conn, "pending_link_expires"),
+                "environment": get_meta(conn, "pending_link_environment") or connections.token_environment(get_meta(conn, "pending_link_token"))}
 
     def sandbox_link(self, conn, institution_id: str = "ins_109508") -> dict:
         """Sandbox only: create a test bank connection without a browser."""
@@ -154,31 +234,45 @@ class Plaid:
 
     def add_item(self, conn, public_token: str, institution: str | None) -> dict:
         require_no_demo(conn)
+        token_env = connections.token_environment(public_token)
+        if token_env and token_env != self.env:
+            raise PlaidError("WRONG_ENVIRONMENT", "This sign-in belongs to a different Plaid environment. Start a new connection.")
         res = self.call("/item/public_token/exchange", {"public_token": public_token})
         item_id = res["item_id"]
         env_name = "POCKETBOOK_PLAID_TOKEN_" + hashlib.sha256(item_id.encode()).hexdigest()[:12].upper()
-        self.secrets["save"](env_name, res["access_token"])
-        if self.secrets["get"](env_name) != res["access_token"]:
-            # Without the token the connection can never sync or be removed; do not leave it open at Plaid.
+        try:
+            self.secrets["save"](env_name, res["access_token"])
+            saved = self.secrets["get"](env_name) == res["access_token"]
+        except Exception:
+            saved = False
+        if not saved:
+            # A secret-store write can fail before returning, too. Try to remove the new Plaid item.
             try:
                 self.call("/item/remove", {"access_token": res["access_token"]})
+                cleanup = "The new Plaid connection was removed."
             except PlaidError:
-                pass
-            raise PlaidError("TOKEN_NOT_SAVED", "Hermes could not store the bank's access token, so the "
-                                                "connection was not kept. Check that Hermes can write its .env.")
+                cleanup = "Plaid removal could not be confirmed. Check this connection in the Plaid Dashboard."
+            raise PlaidError("TOKEN_NOT_SAVED", "Hermes could not store the bank's access token. "
+                             + cleanup + " Check that Hermes can write its .env.")
         with _lock:
             conn.execute(
-                "INSERT OR REPLACE INTO items(item_id, institution, token_env, status, created_at) VALUES(?,?,?,'ok',?)",
-                (item_id, institution or "Bank", env_name, now_iso()),
+                "INSERT INTO items(item_id, institution, token_env, status, created_at, environment) VALUES(?,?,?,'ok',?,?)"
+                " ON CONFLICT(item_id) DO UPDATE SET institution=excluded.institution,token_env=excluded.token_env,"
+                " status='ok',error=NULL,environment=excluded.environment",
+                (item_id, institution or "Bank", env_name, now_iso(), self.env),
             )
             conn.commit()
         return {"item_id": item_id, "institution": institution or "Bank"}
 
     def remove_item(self, conn, item_id: str) -> None:
-        row = conn.execute("SELECT token_env FROM items WHERE item_id=?", (item_id,)).fetchone()
+        row = conn.execute("SELECT token_env,environment FROM items WHERE item_id=?", (item_id,)).fetchone()
         if not row:
             raise PlaidError("NOT_FOUND", f"No connection {item_id}.")
         token = self.secrets["get"](row[0]) if row[0] else None  # imports and sample data have no token
+        if row["token_env"] and not token:
+            raise PlaidError("TOKEN_MISSING", "The bank access token is missing, so removal cannot be confirmed. The connection and history were kept. Restore the credentials or turn the bank off.")
+        if token and (row["environment"] or connections.token_environment(token)) not in (None, self.env):
+            raise PlaidError("WRONG_ENVIRONMENT", "Switch to this bank's environment before disconnecting it, or turn it off to keep its history.")
         if token:
             try:
                 self.call("/item/remove", {"access_token": token})
@@ -199,8 +293,12 @@ class Plaid:
     # ---------- sync ----------
 
     def sync(self, conn, full: bool = False) -> dict:
-        summary = {"items": 0, "added": 0, "modified": 0, "removed": 0, "accounts": 0, "errors": [], "environment": self.env}
+        connections.prepare(conn, self.env, self.secrets["get"])
+        summary = {"skipped_items": [], "items": 0, "added": 0, "modified": 0, "removed": 0, "accounts": 0, "errors": [], "environment": self.env}
         for item in conn.execute("SELECT * FROM items WHERE token_env IS NOT NULL").fetchall():
+            if not item["enabled"] or (item["environment"] and item["environment"] != self.env):
+                summary["skipped_items"].append({"institution": item["institution"], "reason": "turned off" if not item["enabled"] else "different environment"})
+                continue
             token = self.secrets["get"](item["token_env"])
             if not token:
                 _item_status(conn, item["item_id"], "error", "ACCESS_TOKEN_MISSING")
@@ -252,9 +350,13 @@ class Plaid:
         else:
             raise PlaidError("TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION",
                              "the bank's data kept changing during the sync; nothing was saved")
-        if full or not accts:
-            accts = self.call("/accounts/get", {"access_token": token}).get("accounts", [])
-        save_sync(conn, item["item_id"], accts, added, modified, removed, cursor)
+        complete_accounts = full or not accts
+        if complete_accounts:
+            response = self.call("/accounts/get", {"access_token": token})
+            accts = response.get("accounts")
+            if not isinstance(accts, list) or any(not isinstance(a, dict) or not a.get("account_id") for a in accts):
+                raise PlaidError("INVALID_RESPONSE", "The bank did not return a complete account list. Previous balances and history were kept.")
+        save_sync(conn, item["item_id"], accts, added, modified, removed, cursor, complete_accounts=complete_accounts)
         counts.update(added=len(added), modified=len(modified), removed=len(removed), accounts=len(accts))
         if any(a.get("type") in ("investment", "brokerage") for a in accts):
             try:
@@ -278,15 +380,21 @@ def _item_status(conn, item_id, status, error, synced=False):
         conn.commit()
 
 
-def save_sync(conn, item_id, accts, added, modified, removed, cursor) -> None:
+def save_sync(conn, item_id, accts, added, modified, removed, cursor, *, complete_accounts=False) -> None:
     """Apply one /transactions/sync result atomically, so a crash never leaves a half-applied page."""
     stamp = now_iso()
     with _lock, conn:
+        if complete_accounts:
+            conn.execute("UPDATE accounts SET closed=1 WHERE item_id=?", (item_id,))
         for a in accts:
             bal = a.get("balances") or {}
             conn.execute(
-                "INSERT OR REPLACE INTO accounts(account_id, item_id, name, mask, type, subtype, current_cents,"
-                " available_cents, limit_cents, currency, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO accounts(account_id, item_id, name, mask, type, subtype, current_cents,"
+                " available_cents, limit_cents, currency, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(account_id) DO UPDATE SET item_id=excluded.item_id,name=excluded.name,mask=excluded.mask,"
+                " type=excluded.type,subtype=excluded.subtype,current_cents=excluded.current_cents,"
+                " available_cents=excluded.available_cents,limit_cents=excluded.limit_cents,currency=excluded.currency,"
+                " updated_at=excluded.updated_at,closed=0",
                 (a["account_id"], item_id, a.get("name"), a.get("mask"), a.get("type"), a.get("subtype"),
                  _c(bal.get("current")), _c(bal.get("available")), _c(bal.get("limit")),
                  bal.get("iso_currency_code") or "USD", stamp),

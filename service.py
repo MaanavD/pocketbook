@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import alerts, charts, insights
 from .plaid import Plaid
-from .store import PLUGIN_ID, connect, get_meta, now_iso, today
+from . import connections
+from .store import PLUGIN_ID, connect as _connect, get_meta, now_iso, today
 
 SETTING_DEFAULTS = {**alerts.DEFAULTS, "plaid_env": "sandbox", "sync_minutes": 30}
 
@@ -28,9 +29,16 @@ def plaid(s: dict | None = None) -> Plaid:
     return Plaid((s or settings()).get("plaid_env", "sandbox"))
 
 
+def connect():
+    conn = _connect()
+    p = plaid()
+    connections.prepare(conn, p.env, p.secrets["get"])
+    return conn
+
+
 def has_live_items(conn) -> bool:
     """A Plaid connection to sync. Demo data and CSV imports have no token."""
-    return bool(conn.execute("SELECT 1 FROM items WHERE token_env IS NOT NULL LIMIT 1").fetchone())
+    return bool(conn.execute("SELECT 1 FROM active_items WHERE token_env IS NOT NULL LIMIT 1").fetchone())
 
 
 def sync(conn=None, force: bool = False) -> dict:
@@ -45,8 +53,26 @@ def sync(conn=None, force: bool = False) -> dict:
         if age < timedelta(minutes=int(s.get("sync_minutes") or 30)):
             return {"skipped": f"synced {int(age.total_seconds() // 60)} min ago"}
     result = plaid(s).sync(conn, full=force)
+    if result.get("items", 0):
+        try:
+            result["recalculated"] = recalculate(conn)
+        except (ValueError, KeyError, TypeError) as exc:
+            result.setdefault("notes", []).append(f"Bank data refreshed, but recalculation did not finish: {exc}")
     _notify_ui("synced", result)
     return result
+
+
+def recalculate(conn=None) -> dict:
+    """Rebuild derived recommendations from saved data without calling Plaid or changing approved budgets."""
+    from . import wealth
+    conn = conn or connect()
+    t = today()
+    insights.propose_budgets(conn, t)
+    wealth.snapshot(conn, t)
+    new_alerts = alerts.record(conn, alerts.detect(conn, t, settings()))
+    return {"budget_recommendations": len(insights.budget_status(conn, t)["proposed"]),
+            "new_alerts": len(new_alerts), "accounts": len(insights.accounts(conn)),
+            "note": "Recommendations use the last three complete months. Approved budget amounts stay unchanged until you approve or edit them."}
 
 
 def check(conn=None, now: datetime | None = None) -> dict:
