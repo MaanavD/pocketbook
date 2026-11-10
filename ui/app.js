@@ -342,7 +342,8 @@ function TxnList ({ rows, today, grouped, ...rest }) {
       out.push(h('div', { key: `d${t.date}`, className: 'pb-day' }, h('span', null, label(t.date)), h('span', null, net > 0 ? money(net) : `+${money(-net)}`)))
       last = t.date
     }
-    out.push(h(TxnRow, { key: t.id, t, sub: grouped ? t.account : `${day(t.date)} · ${t.account}`, ...rest }))
+    const what = t.items && t.items.length ? t.items.join(', ') : t.account
+    out.push(h(TxnRow, { key: t.id, t, sub: grouped ? what : `${day(t.date)} · ${what}`, ...rest }))
   }
   return h('div', { className: grouped ? '' : 'pb-list', style: { paddingBottom: 8 } }, out)
 }
@@ -431,7 +432,7 @@ function NetWorthMini ({ nw, go }) {
     h('div', { className: 'pb-flex pb-between pb-small', style: { marginTop: 4 } }, h('span', { className: 'pb-muted' }, 'Liabilities'), h('span', { className: 'pb-strong' }, money(nw.liabilities_cents, true))))
 }
 
-function Upcoming ({ bills, today }) {
+function Upcoming ({ bills, today, reorders = [], go }) {
   return h(Card, { title: 'Upcoming', sub: 'Next 14 days' },
     bills.length ? h('div', { className: 'pb-list' }, bills.map(r => {
       const raised = r.last_cents > r.previous_cents
@@ -442,7 +443,14 @@ function Upcoming ({ bills, today }) {
           h('div', { className: 'pb-strong pb-ellipsis' }, r.merchant),
           h('div', { className: 'pb-muted pb-small' }, inDays <= 0 ? 'Due today' : inDays === 1 ? 'Tomorrow' : `In ${inDays} days`, ` · ${r.cadence}`)),
         h('div', { className: 'pb-amt' }, money(r.last_cents), raised && h('div', { className: 'pb-small pb-warn' }, `was ${money(r.previous_cents)}`)))
-    })) : h('div', { className: 'pb-muted' }, 'Nothing due soon.'))
+    })) : h('div', { className: 'pb-muted' }, 'Nothing due soon.'),
+    reorders.length > 0 && h('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--ln)' } },
+      h('div', { className: 'pb-flex pb-between pb-small', style: { marginBottom: 4 } }, h('span', { className: 'pb-eyebrow' }, 'Likely reorders'),
+        h('button', { className: 'pb-link pb-small', onClick: go }, 'Purchases →')),
+      reorders.map(r => h('div', { key: r.key, className: 'pb-row', style: { padding: '6px 0' } },
+        h('div', { className: 'pb-tile sm' }, '🔁'),
+        h('div', { className: 'pb-grow pb-ellipsis pb-small' }, r.name),
+        h('div', { className: 'pb-amt pb-small' }, money(r.typical_cents))))))
 }
 
 function GoalsMini ({ goals, go }) {
@@ -711,7 +719,7 @@ function GoalsPage ({ goals, accounts, post, busy }) {
 
 // ---------- transactions ----------
 
-function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy }) {
+function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy, act }) {
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
   const [rows, setRows] = useState(data.recent)
@@ -730,6 +738,7 @@ function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy })
     h(TxnList, { rows, today: data.overview.today, grouped: true, categories: data.categories, api, onChanged: load })),
     h('div', { className: 'pb-col' },
       h(Rules, { rules: data.rules, categories: data.categories, post, busy }),
+      h(ImportCard, { sources: data.imports, busy, onImport: (filename, text) => act('import', { filename, text }) }),
       h(Card, { flush: true, title: 'Accounts' },
         h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, data.accounts.map(a => h('div', { key: a.account_id, className: 'pb-row' },
           h(Avatar, { name: a.name }),
@@ -757,6 +766,85 @@ function Rules ({ rules, categories, post, busy }) {
       h(Btn, { small: true, ghost: true, title: 'Remove rule', onClick: () => post('/rules', { action: 'remove', id: r.id }) }, '✕')))))
 }
 
+// ---------- purchases ----------
+
+const LIFESPANS = [['', 'Not set'], ['30', '1 month'], ['60', '2 months'], ['90', '3 months'], ['180', '6 months'], ['365', '1 year'], ['730', '2 years'], ['1095', '3 years']]
+const everyText = d => d % 7 === 0 && d < 70 ? `${d / 7} weeks` : d < 60 ? `${d} days` : `${Math.round(d / 30.4)} months`
+const perDay = c => c < 100 ? `${c}¢/day` : `${money(c)}/day`
+
+function LifespanPick ({ it, post }) {
+  const v = it.lifespan_source === 'rebuy' ? '' : String(it.lifespan_days || '')
+  const opts = LIFESPANS.some(([k]) => k === v) ? LIFESPANS : LIFESPANS.concat([[v, `${it.lifespan_days} days`]])
+  return h('select', { className: 'pb-input pb-small', style: { padding: '3px 6px' }, value: v, title: 'How long it lasts',
+    onChange: e => post('/purchases/lifespan', { key: it.key, days: e.target.value ? Number(e.target.value) : null }) },
+  opts.map(([k, l]) => h('option', { key: k, value: k }, it.lifespan_source === 'rebuy' && !k ? `Rebought every ${everyText(it.lifespan_days)}` : l)))
+}
+
+function PurchasesPage ({ p, post, busy, onImport }) {
+  if (!p.items_total) {
+    return h('div', { className: 'pb-col' },
+      h(Card, { title: 'See what your Amazon charges bought', sub: 'Your bank only shows "Amazon $62.22". Add your orders to see items, repeat buys and cost per day.' },
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '4px 0 16px' } },
+          h('div', { className: 'pb-step' }, h('b', null, '1'), h('div', null, 'Ask Hermes in chat: ', h('i', null, '"Read my Amazon orders from this year."'), ' With browser tools signed in to your accounts, Hermes reads your order history and saves it here. It never buys or changes anything.')),
+          h('div', { className: 'pb-step' }, h('b', null, '2'), h('div', null, 'Or request "Your Orders" from Amazon\'s Request Your Data page, then import Order History.csv below.'))),
+        h(ImportButton, { onImport, busy, label: 'Import Amazon CSV' })))
+  }
+  const reb = p.repeats
+  const products = []
+  const byKey = {}
+  for (const it of p.items) {
+    if (!byKey[it.key]) { byKey[it.key] = { ...it, times: 0, total: 0 }; products.push(byKey[it.key]) }
+    byKey[it.key].times += 1; byKey[it.key].total += it.cents
+  }
+  return h('div', { className: 'pb-col' },
+    h(Card, null, h('div', { className: 'pb-stats' },
+      h('div', null, h('div', { className: 'pb-eyebrow' }, 'Your stuff costs'), h('div', { className: 'pb-hero' }, perDay(p.daily_cents)),
+        h('div', { className: 'pb-muted pb-small' }, 'Things still in use, spread over how long they last')),
+      h('div', null, h('div', { className: 'pb-eyebrow' }, 'Per year'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, money(p.yearly_cents, true))),
+      h('div', null, h('div', { className: 'pb-eyebrow' }, 'Repeat buys'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, String(reb.length)),
+        h('div', { className: 'pb-muted pb-small' }, `${money(reb.reduce((s, r) => s + r.yearly_cents, 0), true)} a year`)),
+      h('div', null, h('div', { className: 'pb-eyebrow' }, 'Amazon, last 12 months'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, money(p.spent_12m_cents, true)),
+        h('div', { className: 'pb-muted pb-small' }, `${p.orders} orders${p.unmatched_orders ? ` · ${p.unmatched_orders} not matched to a charge` : ''}`)))),
+    h('div', { className: 'pb-split' },
+      h(Card, { flush: true, title: 'Things you bought', sub: 'Set how long a one-off lasts to spread its cost per day.' },
+        h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, products.map(it => h('div', { key: it.key, className: 'pb-row' },
+          h('div', { className: 'pb-tile' }, '📦'),
+          h('div', { className: 'pb-grow' },
+            h('div', { className: 'pb-strong pb-ellipsis' }, it.name),
+            h('div', { className: 'pb-muted pb-small' }, it.times > 1 ? `Last ${day(it.date)} · bought ${it.times} times` : day(it.date),
+              it.per_day_cents != null ? h('span', { className: it.in_use ? 'pb-good' : '' }, ` · ${perDay(it.per_day_cents)}${it.in_use ? '' : ' (used up)'}`) : null,
+              it.lifespan_source === 'hermes' ? ' · Hermes estimate' : '')),
+          h(LifespanPick, { it, post }),
+          h('div', { className: 'pb-amt' }, money(it.cents), it.times > 1 && h('div', { className: 'pb-muted pb-small', style: { fontWeight: 400 } }, `${money(it.total, true)} total`)))))),
+      h('div', { className: 'pb-col' },
+        h(Card, { flush: true, title: 'Repeat buys', sub: 'Things you rebuy on a rhythm, like subscriptions you never signed up for.' },
+          reb.length ? h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, reb.map(r => h('div', { key: r.key, className: 'pb-row', style: { alignItems: 'flex-start' } },
+            h('div', { className: 'pb-tile sm' }, '🔁'),
+            h('div', { className: 'pb-grow' },
+              h('div', { className: 'pb-strong', style: { lineHeight: 1.3 } }, r.name),
+              h('div', { className: 'pb-muted pb-small', style: { marginTop: 2 } }, `Every ${everyText(r.every_days)} · ${money(r.typical_cents)} · ${perDay(r.per_day_cents)}`),
+              h('div', { className: 'pb-small', style: { marginTop: 2 } }, r.due ? h(Chip, { tone: 'warn' }, `Reorder around ${day(r.next_date)}`) : h('span', { className: 'pb-muted' }, `Next around ${day(r.next_date)}`))),
+            h('div', { className: 'pb-amt' }, money(r.yearly_cents, true), h('div', { className: 'pb-muted pb-small', style: { fontWeight: 400 } }, 'a year')))))
+            : h('div', { className: 'pb-muted', style: { padding: '4px 20px 18px' } }, 'None yet. Two orders of the same item make a pattern.')),
+        h(Card, { title: 'Add orders' },
+          h('div', { className: 'pb-muted', style: { marginBottom: 12 } }, 'Ask Hermes to read your Amazon order history, or import Order History.csv.'),
+          h(ImportButton, { onImport, busy, label: 'Import Amazon CSV' })))))
+}
+
+function ImportButton ({ onImport, busy, label = 'Import CSV' }) {
+  return h('label', { className: 'pb-btn', style: { display: 'inline-block', opacity: busy ? 0.5 : 1 } }, label,
+    h('input', { type: 'file', accept: '.csv,text/csv', style: { display: 'none' }, disabled: busy,
+      onChange: e => { const f = e.target.files[0]; e.target.value = ''; if (f) f.text().then(text => onImport(f.name, text)) } }))
+}
+
+function ImportCard ({ sources, onImport, busy }) {
+  return h(Card, { title: 'Import', sub: 'CSV from Monarch, Mint, YNAB, Rocket Money, Copilot, your bank, or Amazon orders.' },
+    sources.length > 0 && h('div', { className: 'pb-list', style: { marginBottom: 12 } }, sources.map(src => h('div', { key: src.item_id, className: 'pb-row', style: { padding: '8px 0' } },
+      h('div', { className: 'pb-grow' }, h('div', { className: 'pb-strong' }, src.institution),
+        h('div', { className: 'pb-muted pb-small' }, `${src.transactions} transactions${src.first ? ` · ${day(src.first)} ${src.first.slice(0, 4)} to ${day(src.last)} ${src.last.slice(0, 4)}` : ''}`))))),
+    h(ImportButton, { onImport, busy }))
+}
+
 // ---------- setup ----------
 
 function Setup ({ setup, act, busy }) {
@@ -770,6 +858,7 @@ function Setup ({ setup, act, busy }) {
     h('div', { className: 'pb-flex pb-wrap' },
       h(Btn, { primary: true, disabled: !ready || busy, onClick: () => act('connect') }, 'Connect a bank'),
       setup.plaid_env === 'sandbox' && h(Btn, { disabled: !ready || busy, onClick: () => act('test-bank') }, 'Add Plaid test bank'),
+      h(ImportButton, { busy, label: 'Import from Monarch or a CSV', onImport: (name, text) => act('import', { filename: name, text }) }),
       h(Btn, { ghost: true, disabled: busy, onClick: () => act('demo') }, 'Try sample data')),
     setup.linking && h('div', { className: 'pb-notice', style: { marginTop: 14 } },
       h('span', null, 'Finished signing in to your bank?'),
@@ -778,7 +867,7 @@ function Setup ({ setup, act, busy }) {
 
 // ---------- app ----------
 
-const TABS = [['overview', 'Overview'], ['budget', 'Budget'], ['cashflow', 'Cash flow'], ['wealth', 'Net worth'], ['goals', 'Goals'], ['activity', 'Transactions']]
+const TABS = [['overview', 'Overview'], ['budget', 'Budget'], ['cashflow', 'Cash flow'], ['wealth', 'Net worth'], ['goals', 'Goals'], ['stuff', 'Purchases'], ['activity', 'Transactions']]
 
 function FinanceApp () {
   const [data, setData] = useState(null)
@@ -820,6 +909,10 @@ function FinanceApp () {
         await post('/budgets/approve', body)
       } else if (what === 'budget-set') {
         await post('/budgets/set', body)
+      } else if (what === 'import') {
+        const r = await post('/import', body)
+        setNotice([r.format === 'amazon' ? `Imported ${r.added} Amazon items from ${r.orders} orders; ${r.matched_orders} matched to card charges.`
+          : `Imported ${r.added} transactions from ${r.format} (${r.from} to ${r.to})${r.already_had ? `, ${r.already_had} already here` : ''}.`])
       } else if (what === 'dismiss') {
         await post('/alerts/dismiss', body)
       }
@@ -843,6 +936,7 @@ function FinanceApp () {
     try { await api(path, { method: 'POST', body }); await load() } catch (e) { setNotice([`Error: ${e && e.message || e}`, true]) } finally { setBusy(false) }
   }
   const go = k => () => { setFilter(null); setTab(k) }
+  const onImport = (filename, text) => act('import', { filename, text })
   const tabs = TABS.map(([k, l]) => [k, k === 'goals' && data.goals.length ? `${l} ${data.goals.length}` : k === 'budget' && data.budgets.proposed.length ? `${l} •` : l])
 
   return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page' },
@@ -868,11 +962,12 @@ function FinanceApp () {
         h('div', { className: 'pb-col' },
           h(BudgetMini, { b: data.budgets, go: go('budget'), act, busy }),
           h(NetWorthMini, { nw: data.networth, go: go('wealth') }),
-          h(Upcoming, { bills: o.upcoming_bills, today: o.today }),
+          h(Upcoming, { bills: o.upcoming_bills, today: o.today, reorders: data.purchases.repeats.filter(r => r.due), go: go('stuff') }),
           h(GoalsMini, { goals: data.goals, go: go('goals') })))
         : tab === 'budget' ? h(BudgetPage, { b: data.budgets, act, busy })
           : tab === 'cashflow' ? h(CashFlowPage, { o, months: data.months, spending: data.spending })
             : tab === 'wealth' ? h(NetWorthPage, { nw: data.networth, inv: data.investments, today: o.today })
               : tab === 'goals' ? h(GoalsPage, { goals: data.goals, accounts: data.accounts, post, busy })
-                : h(TransactionsPage, { data, api, filter, clearFilter: () => setFilter(null), load, post, busy })))
+                : tab === 'stuff' ? h(PurchasesPage, { p: data.purchases, post, busy, onImport })
+                  : h(TransactionsPage, { data, api, filter, clearFilter: () => setFilter(null), load, post, busy, act })))
 }

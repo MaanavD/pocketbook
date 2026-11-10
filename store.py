@@ -63,6 +63,19 @@ _SCHEMA = [
         cash_cents INTEGER, investments_cents INTEGER, credit_cents INTEGER, loans_cents INTEGER
     );
     """,
+    # v3: item-level purchases (Amazon orders) and how long things last
+    """
+    CREATE TABLE purchases (
+        id TEXT PRIMARY KEY, source TEXT NOT NULL, order_id TEXT, order_date TEXT NOT NULL,
+        product TEXT NOT NULL, product_key TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1,
+        cents INTEGER NOT NULL, txn_id TEXT, created_at TEXT
+    );
+    CREATE INDEX purchases_key ON purchases(product_key);
+    CREATE INDEX purchases_txn ON purchases(txn_id);
+    CREATE TABLE products (
+        key TEXT PRIMARY KEY, lifespan_days INTEGER, lifespan_source TEXT, hidden INTEGER NOT NULL DEFAULT 0
+    );
+    """,
 ]
 
 _lock = threading.RLock()

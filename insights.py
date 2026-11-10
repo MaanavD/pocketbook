@@ -382,14 +382,17 @@ def find_transactions(conn, *, query=None, category=None, merchant=None, start=N
         args.append(min_cents)
     sql += " ORDER BY t.date DESC, t.amount_cents DESC LIMIT ?"
     args.append(int(limit))
+    rows = conn.execute(sql, args).fetchall()
+    from .purchases import items_for
+    bought = items_for(conn, [r["id"] for r in rows])
     return [
         {
-            "id": r["id"], "date": r["date"], "amount_cents": r["amount_cents"],
+            "id": r["id"], "date": r["date"], "amount_cents": r["amount_cents"], "items": bought.get(r["id"], []),
             "merchant": r["merchant"] or r["name"], "description": r["name"],
             "category": r["cat"], "category_label": label(r["cat"]), "pending": bool(r["pending"]),
             "account": f"{r['account'] or ''} {('••' + r['mask']) if r['mask'] else ''}".strip(),
         }
-        for r in conn.execute(sql, args).fetchall()
+        for r in rows
     ]
 
 

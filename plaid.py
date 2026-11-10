@@ -162,7 +162,7 @@ class Plaid:
 
     def sync(self, conn) -> dict:
         summary = {"items": 0, "added": 0, "modified": 0, "removed": 0, "errors": []}
-        for item in conn.execute("SELECT * FROM items WHERE item_id != 'demo'").fetchall():
+        for item in conn.execute("SELECT * FROM items WHERE token_env IS NOT NULL").fetchall():
             token = self.secrets["get"](item["token_env"])
             if not token:
                 _item_status(conn, item["item_id"], "error", "ACCESS_TOKEN_MISSING")

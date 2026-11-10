@@ -6,7 +6,7 @@ import json
 import time
 import webbrowser
 
-from . import demo, service
+from . import demo, imports, service
 from .insights import category_key
 from .store import connect, today
 
@@ -24,6 +24,9 @@ def setup(parser) -> None:
     c.add_argument("merchant")
     c.add_argument("amount", type=float)
     c.add_argument("--category", default="GENERAL_MERCHANDISE")
+    i = subs.add_parser("import", help="Import a CSV: Monarch, Mint, YNAB, Rocket Money, Copilot, a bank, or Amazon orders")
+    i.add_argument("file")
+    i.add_argument("--format", default=None)
     parser.set_defaults(func=run)
 
 
@@ -71,6 +74,9 @@ def run(args) -> None:
             info = demo.load(conn, today())
             print(f"Loaded {info['transactions']} sample transactions across {info['accounts']} accounts.")
             print("Ask Hermes to propose budgets, or open the Finance tab.")
+    elif cmd == "import":
+        res = imports.import_path(conn, args.file, args.format)
+        print(json.dumps(res, indent=2))
     elif cmd == "charge":
         if not conn.execute("SELECT 1 FROM items WHERE item_id='demo'").fetchone():
             print("Load sample data first: hermes pocketbook demo")

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from . import alerts, insights, service, wealth
+from . import alerts, imports, insights, purchases, service, wealth
 from .plaid import PlaidError
 from .store import connect, dollars, today
 
@@ -241,6 +241,46 @@ def rules(args):
     return _ok(rules=wealth.list_rules(conn))
 
 
+@_safe
+def import_file(args):
+    blocked = _no_cron("import")
+    if blocked:
+        return blocked
+    conn = connect()
+    if args.get("remove"):
+        return _ok(removed=imports.remove(conn, args["remove"]))
+    if not args.get("path"):
+        return _ok(imported_sources=imports.sources(conn))
+    res = imports.import_path(conn, args["path"], args.get("format") or None)
+    return _ok(**res, note="Imported rows count like synced ones. If a connected bank covers the same dates, "
+                           "the same charges now appear twice; offer to remove the import.")
+
+
+@_safe
+def purchases_tool(args):
+    conn = connect()
+    action = args.get("action", "list")
+    if action != "list":
+        blocked = _no_cron(f"purchases {action}")
+        if blocked:
+            return blocked
+    if action == "import_orders":
+        res = purchases.add_orders(conn, args.get("orders") or [])
+        return _ok(**res, summary=_brief(purchases.summary(conn, today(), limit=10)))
+    if action == "set_lifespan":
+        key = args.get("key") or purchases.product_key(args.get("name") or "")
+        purchases.set_lifespan(conn, key, int(args["days"]) if args.get("days") else None,
+                               "hermes" if args.get("estimated") else "you")
+    elif action == "hide":
+        purchases.hide(conn, args["key"])
+    return _ok(**_brief(purchases.summary(conn, today(), limit=int(args.get("limit") or 40))))
+
+
+def _brief(s):
+    return {**s, "note": "per_day/yearly use the item's lifespan (set by the user or estimated by Hermes) or, for "
+                         "repeat buys, the usual gap between orders. in_use means the item is still within that span."}
+
+
 # ---------- schemas ----------
 
 CATEGORIES = ", ".join(v for k, v in insights.LABELS.items())
@@ -317,6 +357,32 @@ TOOLS = [
      {"action": {"type": "string", "enum": ["list", "add", "remove"]}, "id": {"type": "integer"},
       "match": {"type": "string"}, "category": {"type": "string"},
       "min_amount": {"type": "number"}, "max_amount": {"type": "number"}}),
+    ("money_import", import_file, "📥",
+     "Import a CSV file the user points to: transactions exported from Monarch, Mint, YNAB, Rocket Money, Copilot "
+     "or a bank, or Amazon's order history (Order History.csv from Amazon's Request Your Data). The format is "
+     "recognized from the header. With no path, lists earlier imports; remove='monarch' (etc.) deletes one.",
+     {"path": {"type": "string", "description": "Absolute path to the .csv file"},
+      "format": {"type": "string", "description": "Only if detection is wrong: monarch, mint, ynab, rocket money, copilot, bank, amazon"},
+      "remove": {"type": "string", "description": "Import source to delete, e.g. monarch"}}),
+    ("money_purchases", purchases_tool, "📦",
+     "Item-level purchases (Amazon orders): what each Amazon charge bought, things the user rebuys on a rhythm "
+     "(repeat buys, like unofficial subscriptions), and cost per day / per year of use. action=import_orders "
+     "stores orders you read from the user's Amazon order history in the browser. action=set_lifespan records "
+     "how long an item lasts (days), so its cost spreads per day.",
+     {"action": {"type": "string", "enum": ["list", "import_orders", "set_lifespan", "hide"]},
+      "orders": {"type": "array", "description": "For import_orders",
+                 "items": {"type": "object", "properties": {
+                     "order_id": {"type": "string"}, "date": DATE,
+                     "total": {"type": "number", "description": "Order total charged, dollars"},
+                     "items": {"type": "array", "items": {"type": "object", "properties": {
+                         "name": {"type": "string"}, "price": {"type": "number", "description": "Item price, dollars, if shown"},
+                         "quantity": {"type": "integer"}}, "required": ["name"]}}},
+                     "required": ["date", "items"]}},
+      "key": {"type": "string", "description": "Product key from a list result"},
+      "name": {"type": "string", "description": "Product name, if no key"},
+      "days": {"type": "integer", "description": "How many days the item lasts; omit to clear"},
+      "estimated": {"type": "boolean", "description": "True when you estimated the lifespan rather than the user stating it"},
+      "limit": {"type": "integer"}}),
     ("money_categorize", categorize, "🏷️",
      "Change a transaction's category when the user says it is wrong; optionally every charge from that merchant.",
      {"transaction_id": {"type": "string"}, "category": {"type": "string", "description": f"One of: {CATEGORIES}"},

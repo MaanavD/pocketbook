@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from datetime import date, timedelta
 
-from . import wealth
+from . import purchases, wealth
 from .plaid import save_sync
 from .store import _lock, now_iso, set_meta
 
@@ -99,8 +99,14 @@ def build(today: date, months: int = 6, seed: int = 7) -> list[dict]:
             add(d, "Acme Corp Payroll", -3150, "INCOME", "INCOME_WAGES", "demo-checking", "ACME CORP DIRECT DEP")
         for merchant, cat, detailed, lo, hi, p in EVERYDAY:
             if rng.random() < p:
-                add(d, merchant, rng.uniform(lo, hi), cat, detailed, pending=(today - d).days < 1)
+                amount = rng.uniform(lo, hi)  # drawn even for Amazon so the other merchants keep their amounts
+                if merchant != "Amazon":
+                    add(d, merchant, amount, cat, detailed, pending=(today - d).days < 1)
         d += timedelta(days=1)
+
+    for o in amazon_orders(today):
+        add(date.fromisoformat(o["date"]) + timedelta(days=1), "Amazon", o["total"], "GENERAL_MERCHANDISE",
+            "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES", name="AMAZON MKTPL*" + o["order_id"][-6:].upper())
 
     # The moments worth a ping, all inside the last week.
     add(today - timedelta(days=2), "Apple Store", 1299, "GENERAL_MERCHANDISE", "GENERAL_MERCHANDISE_ELECTRONICS")
@@ -110,6 +116,39 @@ def build(today: date, months: int = 6, seed: int = 7) -> list[dict]:
     add(dup_day, "Sweetgreen", 16.42, "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")
     add(dup_day, "Sweetgreen", 16.42, "FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT")
     return tx
+
+
+# Things people rebuy: name, price, every N days, first order N days ago.
+AMAZON_REPEAT = [
+    ("Utopia Towels Cotton Washcloths, 24 Pack", 15.99, 63, 170),
+    ("CeraVe Hydrating Facial Cleanser, 16 fl oz", 17.78, 42, 160),
+    ("La Roche-Posay Anthelios Melt-in Sunscreen SPF 60", 37.99, 75, 150),
+    ("Bounty Select-A-Size Paper Towels, 12 Double Rolls", 31.49, 30, 175),
+    ("Nespresso Vertuo Coffee Pods, Variety Pack, 30 Count", 36.00, 35, 165),
+]
+AMAZON_ONCE = [
+    ("Anker 65W USB-C Charger", 35.99, 150), ("Kindle Paperwhite 16GB", 159.99, 121),
+    ("Lodge 12 Inch Cast Iron Skillet", 29.90, 96), ("Brooks Ghost 16 Running Shoes", 139.95, 58),
+    ("Philips Sonicare Replacement Brush Heads, 4 Pack", 34.96, 19), ("Moleskine Classic Notebook", 22.95, 44),
+]
+
+
+def amazon_orders(today: date) -> list[dict]:
+    """Sample Amazon orders: items on the same day share an order, 8.625% tax spread across them."""
+    by_day: dict[date, list] = {}
+    for name, price, every, first in AMAZON_REPEAT:
+        ago = first
+        while ago >= 3:
+            by_day.setdefault(today - timedelta(days=ago), []).append((name, price))
+            ago -= every
+    for name, price, ago in AMAZON_ONCE:
+        by_day.setdefault(today - timedelta(days=ago), []).append((name, price))
+    out = []
+    for i, (d, items) in enumerate(sorted(by_day.items())):
+        total = round(sum(p for _, p in items) * 1.08625, 2)
+        out.append({"order_id": f"demo-114-{i:07d}", "date": d.isoformat(), "total": total,
+                    "items": [{"name": n, "price": p} for n, p in items]})
+    return out
 
 
 def load(conn, today: date) -> dict:
@@ -133,6 +172,9 @@ def load(conn, today: date) -> dict:
         conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE name = 'Emergency fund'",
                      ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00",))
     wealth.add_goal(conn, "Japan trip", 600000, (today + timedelta(days=150)).isoformat(), saved_cents=210000)
+    purchases.add_orders(conn, amazon_orders(today))
+    purchases.set_lifespan(conn, purchases.product_key("Philips Sonicare Replacement Brush Heads, 4 Pack"), 360, "hermes")
+    purchases.set_lifespan(conn, purchases.product_key("Brooks Ghost 16 Running Shoes"), 300, "you")
     wealth.add_rule(conn, "Trader Joe", "GROCERIES")
     wealth.add_rule(conn, "Whole Foods", "GROCERIES")
     set_meta(conn, "demo", "1")
@@ -179,10 +221,11 @@ def clear(conn) -> None:
         conn.execute("DELETE FROM items WHERE item_id='demo'")
         conn.execute("DELETE FROM holdings WHERE account_id LIKE 'demo-%'")
         conn.execute("DELETE FROM securities WHERE security_id LIKE 'demo-%'")
+        conn.execute("DELETE FROM purchases WHERE order_id LIKE 'demo-%'")
         conn.execute("DELETE FROM goals WHERE account_id LIKE 'demo-%' OR name IN ('Emergency fund', 'Japan trip')")
         if not conn.execute("SELECT 1 FROM items WHERE item_id != 'demo' LIMIT 1").fetchone():
             # sample-only state; with a real bank connected these stay
-            for table in ("alerts", "budgets", "networth", "rules"):
+            for table in ("alerts", "budgets", "networth", "rules", "products"):
                 conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM meta WHERE key='demo'")
         conn.commit()

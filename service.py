@@ -28,7 +28,8 @@ def plaid(s: dict | None = None) -> Plaid:
 
 
 def has_live_items(conn) -> bool:
-    return bool(conn.execute("SELECT 1 FROM items WHERE item_id != 'demo' LIMIT 1").fetchone())
+    """A Plaid connection to sync. Demo data and CSV imports have no token."""
+    return bool(conn.execute("SELECT 1 FROM items WHERE token_env IS NOT NULL LIMIT 1").fetchone())
 
 
 def sync(conn=None, force: bool = False) -> dict:

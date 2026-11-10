@@ -22,6 +22,8 @@ provides_tools:
   - money_goals
   - money_rules
   - money_categorize
+  - money_import
+  - money_purchases
 provides_hooks: []
 config_schema:
   plaid_client_id:

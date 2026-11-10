@@ -27,6 +27,8 @@ def _package():
 _PKG = _package()
 alerts = importlib.import_module(f"{_PKG}.alerts")
 demo = importlib.import_module(f"{_PKG}.demo")
+imports = importlib.import_module(f"{_PKG}.imports")
+purchases = importlib.import_module(f"{_PKG}.purchases")
 insights = importlib.import_module(f"{_PKG}.insights")
 service = importlib.import_module(f"{_PKG}.service")
 store = importlib.import_module(f"{_PKG}.store")
@@ -70,6 +72,8 @@ def _summary():
         "investments": wealth.investments(conn),
         "goals": wealth.goals(conn, t),
         "rules": wealth.list_rules(conn),
+        "purchases": purchases.summary(conn, t),
+        "imports": imports.sources(conn),
         "categories": {k: insights.label(k) for k in sorted(cats)},
         "setup": {"plaid_configured": p.configured, "plaid_env": p.env,
                   "linking": bool(store.get_meta(conn, "pending_link_token")),
@@ -253,4 +257,32 @@ async def sample_data(body: DemoBody):
         info = demo.load(conn, store.today())
         insights.propose_budgets(conn, store.today())
         return info
+    return await _run(go)
+
+
+class ImportBody(BaseModel):
+    filename: str = "import.csv"
+    text: str
+
+
+@router.post("/import")
+async def import_csv(body: ImportBody):
+    return await _run(lambda: imports.import_text(store.connect(), body.text, body.filename))
+
+
+class LifespanBody(BaseModel):
+    key: str
+    days: int | None = None
+    hidden: bool | None = None
+
+
+@router.post("/purchases/lifespan")
+async def lifespan(body: LifespanBody):
+    def go():
+        conn = store.connect()
+        if body.hidden is not None:
+            purchases.hide(conn, body.key, body.hidden)
+        else:
+            purchases.set_lifespan(conn, body.key, body.days, "you")
+        return {"ok": True}
     return await _run(go)
