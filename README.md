@@ -22,7 +22,7 @@ All math runs in code. The model explains results; it never computes totals.
 
 ## Setup
 
-1. Install and enable: `hermes plugins install <repo>` then `hermes plugins enable pocketbook`.
+1. Install and enable: `hermes plugins install https://github.com/MaanavD/pocketbook` then `hermes plugins enable pocketbook`.
 2. Get Plaid keys at [dashboard.plaid.com](https://dashboard.plaid.com) (Developers → Keys). Sandbox keys work right away; production needs Plaid's free Trial plan.
 3. Paste the client ID and secret in **Settings → Plugins → pocketbook** and pick `sandbox` or `production`.
 4. Connect a bank from the Finance tab, by asking Hermes, or with `hermes pocketbook connect`. Plaid hosts the sign-in page, so no server or webhook is needed.

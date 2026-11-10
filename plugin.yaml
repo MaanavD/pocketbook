@@ -5,7 +5,7 @@ api_version: 1
 description: "Your money in Hermes: Plaid-synced spending, proposed budgets, net worth, investments, savings goals, categorization rules, charts, a Finance tab, and alerts for unusual charges"
 author: Maanav Merwaha
 license: MIT
-homepage: https://github.com/maanavmerwaha/pocketbook
+homepage: https://github.com/MaanavD/pocketbook
 tags: [finance, budget, plaid, alerts]
 requires_hermes: ">=0.23.0"
 provides_tools:
