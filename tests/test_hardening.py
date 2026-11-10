@@ -324,3 +324,21 @@ def test_negative_limit_is_not_unlimited(tool_db):
 def test_chart_kind_is_checked_before_it_names_a_file():
     with pytest.raises(ValueError, match="unknown chart"):
         service.chart("../../../tmp/x")
+
+
+def test_samples_refuse_standalone_user_settings():
+    c = store.memory()
+    goal = wealth.add_goal(c, "Emergency fund", 500000, saved_cents=100000)
+    before = dict(c.execute("SELECT * FROM goals WHERE id = ?", (goal["id"],)).fetchone())
+    with pytest.raises(ValueError, match="empty"):
+        demo.load(c, TODAY)
+    assert dict(c.execute("SELECT * FROM goals WHERE id = ?", (goal["id"],)).fetchone()) == before
+    assert c.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_clear_samples_preserves_user_budget():
+    c = store.memory()
+    demo.load(c, TODAY)
+    insights.set_budget(c, "TRAVEL", 50000)
+    demo.clear(c)
+    assert c.execute("SELECT amount_cents FROM budgets WHERE category = ?", ("TRAVEL",)).fetchone()[0] == 50000

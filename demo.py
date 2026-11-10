@@ -158,6 +158,10 @@ def load(conn, today: date) -> dict:
             or conn.execute("SELECT 1 FROM purchases WHERE order_id NOT LIKE 'demo-%' LIMIT 1").fetchone()):
         raise ValueError("Sample data only loads into an empty Pocketbook. You already have accounts, imports "
                          "or purchases here.")
+    has_samples = conn.execute("SELECT 1 FROM items WHERE item_id='demo'").fetchone()
+    if not has_samples and any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                               for table in ("goals", "budgets", "rules", "products", "networth", "alerts")):
+        raise ValueError("Sample data only loads into an empty Pocketbook. You already have saved settings or history.")
     clear(conn)
     with _lock:
         conn.execute(
@@ -175,8 +179,8 @@ def load(conn, today: date) -> dict:
     _networth_history(conn, today)
     fund = wealth.add_goal(conn, "Emergency fund", 2000000, (today + timedelta(days=210)).isoformat(), "demo-savings")
     with _lock, conn:  # pretend the goal started in spring so its pace is meaningful
-        conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE name = 'Emergency fund'",
-                     ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00",))
+        conn.execute("UPDATE goals SET start_cents = 900000, created_at = ? WHERE id = ?",
+                     ((today - timedelta(days=150)).isoformat() + "T00:00:00+00:00", fund["id"]))
     trip = wealth.add_goal(conn, "Japan trip", 600000, (today + timedelta(days=150)).isoformat(), saved_cents=210000)
     set_meta(conn, "demo_goals", json.dumps([fund["id"], trip["id"]]))  # so clear() removes these and no others
     purchases.add_orders(conn, amazon_orders(today))
@@ -241,6 +245,6 @@ def clear(conn) -> None:
         if not (conn.execute("SELECT 1 FROM items LIMIT 1").fetchone()
                 or conn.execute("SELECT 1 FROM purchases LIMIT 1").fetchone()):
             # sample-only state; with real data present these stay
-            for table in ("alerts", "budgets", "networth", "rules", "products"):
+            for table in ("alerts", "networth", "rules", "products"):
                 conn.execute(f"DELETE FROM {table}")
         conn.execute("DELETE FROM meta WHERE key IN ('demo', 'demo_goals')")
