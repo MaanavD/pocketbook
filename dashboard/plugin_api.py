@@ -51,7 +51,13 @@ def _summary():
     s = service.settings()
     p = service.plaid(s)
     cats = {*insights.LABELS, *(r[0] for r in conn.execute(f"SELECT DISTINCT {insights.CAT_SQL} {insights.FROM_SQL}"))}
+    month = insights.month_of(t)
+    start, end = insights.month_range(month)
+    pstart, pend = insights.month_range(insights.shift_month(month, -1))
     return {
+        "spending": {"this": insights.spending_by_category(conn, start, t),
+                     "last": insights.spending_by_category(conn, pstart, pend),
+                     "merchants": insights.spending_by_merchant(conn, start, t, limit=8)},
         "overview": insights.overview(conn, t),
         "budgets": insights.budget_status(conn, t),
         "months": insights.monthly_totals(conn, t, 6),

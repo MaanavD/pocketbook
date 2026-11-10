@@ -12,29 +12,117 @@ let onRefreshEvent = () => () => {}
 const h = React.createElement
 const { useState, useEffect, useCallback, useMemo } = React
 
-const V = {
-  text: 'inherit',
-  muted: 'var(--ui-text-tertiary, var(--color-muted-foreground, #888))',
-  faint: 'var(--ui-text-quaternary, var(--color-muted-foreground, #aaa))',
-  line: 'var(--ui-stroke-secondary, var(--color-border, rgba(127,127,127,.25)))',
-  card: 'var(--ui-bg-card, var(--color-card, transparent))',
-  track: 'var(--ui-bg-tertiary, var(--color-muted, rgba(127,127,127,.15)))',
-  accent: 'var(--ui-accent, var(--color-primary, #3478f6))',
-  red: 'var(--ui-red, var(--color-destructive, #e0483c))',
-  yellow: 'var(--ui-orange, var(--ui-yellow, #e8982a))',
-  green: 'var(--ui-green, #20966a)'
-}
+// Theme tokens come from the host (Desktop --ui-*, dashboard --color-*), so the tab follows light and dark mode.
+const CSS = `
+.pb{--m:var(--ui-text-tertiary,var(--color-muted-foreground,#8a8f98));--ln:var(--ui-stroke-secondary,var(--color-border,rgba(127,127,127,.22)));
+--cd:var(--ui-bg-card,var(--color-card,transparent));--tk:var(--ui-bg-tertiary,var(--color-muted,rgba(127,127,127,.14)));
+--ac:var(--ui-accent,var(--color-primary,#3478f6));--acf:var(--ui-accent-foreground,var(--color-primary-foreground,#fff));
+--rd:var(--ui-red,var(--color-destructive,#e0483c));--yl:var(--ui-orange,var(--ui-yellow,#e8982a));--gn:var(--ui-green,#1f9d6b);
+--pp:var(--ui-purple,#8b6cf0);--bl:var(--ui-blue,#4c9bf5);--hv:color-mix(in srgb,currentColor 4%,transparent);
+container-type:inline-size;font-size:13px;line-height:1.45;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.pb *{box-sizing:border-box}
+.pb-page{display:flex;flex-direction:column;gap:20px;padding:28px 32px 56px;max-width:1240px;margin:0 auto}
+.pb-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.pb-title{font-size:24px;font-weight:650;letter-spacing:-.02em;margin:0}
+.pb-sub{color:var(--m);margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pb-nav{display:flex;gap:2px;padding:3px;border-radius:10px;background:var(--tk);width:fit-content;max-width:100%;overflow-x:auto}
+.pb-nav button{border:0;background:transparent;color:var(--m);font:inherit;font-weight:500;padding:6px 14px;border-radius:8px;cursor:pointer;white-space:nowrap}
+.pb-nav button:hover{color:inherit}
+.pb-nav button[aria-selected=true]{background:var(--cd);color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--ln)}
+.pb-split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+.pb-col{display:flex;flex-direction:column;gap:20px;min-width:0}
+.pb-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+.pb-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:20px}
+@container (max-width:900px){.pb-split,.pb-two{grid-template-columns:minmax(0,1fr)}.pb-page{padding:20px 16px 40px}}
+.pb-card{border:1px solid var(--ln);border-radius:14px;background:var(--cd);padding:20px;min-width:0}
+.pb-card.flush{padding:0}.pb-card.flush>.pb-card-h{padding:18px 20px 6px}
+.pb-card-h{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.pb-card-h h2{font-size:14px;font-weight:600;margin:0}
+.pb-link{border:0;background:none;color:var(--m);font:inherit;cursor:pointer;padding:0;white-space:nowrap}.pb-link:hover{color:var(--ac)}
+.pb-eyebrow{color:var(--m);font-size:12px;font-weight:500}
+.pb-hero{font-size:32px;font-weight:650;letter-spacing:-.025em;line-height:1.15;margin:2px 0 6px}
+.pb-hero.md{font-size:26px}
+.pb-muted{color:var(--m)}.pb-small{font-size:12px}.pb-strong{font-weight:550}.pb-grow{flex:1;min-width:0}
+.pb-ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pb-good{color:var(--gn)}.pb-bad{color:var(--rd)}.pb-warn{color:var(--yl)}
+.pb-flex{display:flex;align-items:center;gap:10px}.pb-wrap{flex-wrap:wrap}.pb-between{justify-content:space-between}
+.pb-btn{border:1px solid var(--ln);border-radius:8px;padding:6px 12px;background:var(--cd);color:inherit;font:inherit;font-weight:500;cursor:pointer;white-space:nowrap}
+.pb-btn:hover:not(:disabled){background:var(--hv)}.pb-btn:disabled{opacity:.5;cursor:default}
+.pb-btn.primary{background:var(--ac);border-color:transparent;color:var(--acf)}.pb-btn.primary:hover:not(:disabled){filter:brightness(1.08);background:var(--ac)}
+.pb-btn.ghost{border-color:transparent;background:transparent;color:var(--m)}.pb-btn.ghost:hover{color:inherit}
+.pb-btn.sm{padding:3px 9px;font-size:12px;border-radius:7px}
+.pb-input{border:1px solid var(--ln);border-radius:8px;padding:6px 10px;background:transparent;color:inherit;font:inherit;min-width:0}
+.pb-input:focus{outline:2px solid color-mix(in srgb,var(--ac) 40%,transparent);outline-offset:-1px}
+.pb-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:550;white-space:nowrap}
+.pb-chip.good{color:var(--gn);background:color-mix(in srgb,var(--gn) 13%,transparent)}
+.pb-chip.bad{color:var(--rd);background:color-mix(in srgb,var(--rd) 13%,transparent)}
+.pb-chip.warn{color:var(--yl);background:color-mix(in srgb,var(--yl) 15%,transparent)}
+.pb-chip.neutral{color:var(--m);background:var(--tk)}
+.pb-chip.accent{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.pb-list>*+*{border-top:1px solid var(--ln)}
+.pb-row{display:flex;align-items:center;gap:12px;padding:10px 0}
+.pb-card.flush .pb-row{padding:10px 20px}
+.pb-card.flush .pb-row:hover{background:var(--hv)}
+.pb-day{display:flex;justify-content:space-between;padding:14px 20px 6px;color:var(--m);font-size:12px;font-weight:550;border-top:0!important}
+.pb-av{width:32px;height:32px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:650;font-size:13px}
+.pb-tile{width:32px;height:32px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:16px;background:var(--tk)}
+.pb-tile.sm{width:26px;height:26px;border-radius:7px;font-size:13px}
+.pb-amt{text-align:right;white-space:nowrap;font-weight:550;min-width:84px}
+.pb-cat{border:0;background:var(--tk);color:inherit;font:inherit;font-size:12px;padding:3px 9px;border-radius:999px;cursor:pointer;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.pb-cat:hover{background:color-mix(in srgb,var(--ac) 15%,transparent)}
+.pb-bar{position:relative;height:8px;border-radius:99px;background:var(--tk);overflow:hidden}
+.pb-bar.thin{height:5px}
+.pb-bar>i{position:absolute;top:0;bottom:0;left:0;border-radius:99px}
+.pb-tick{position:absolute;top:-3px;bottom:-3px;width:2px;border-radius:1px;background:currentColor;opacity:.55}
+.pb-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.pb-stats>div{padding:2px 20px}.pb-stats>div:first-child{padding-left:0}
+.pb-stats>div+div{border-left:1px solid var(--ln)}
+.pb-chart{position:relative}
+.pb-chart svg{display:block;overflow:visible}
+.pb-tip{position:absolute;top:6px;pointer-events:none;background:var(--cd);border:1px solid var(--ln);border-radius:10px;padding:8px 11px;
+box-shadow:0 6px 20px rgba(0,0,0,.12);font-size:12px;min-width:150px;z-index:2;backdrop-filter:blur(8px)}
+.pb-tip-row{display:flex;align-items:center;gap:7px;justify-content:space-between}
+.pb-dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.pb-legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--m);font-size:12px}
+.pb-legend span{display:inline-flex;align-items:center;gap:6px}
+.pb-seg{display:inline-flex;gap:2px;padding:2px;border-radius:8px;background:var(--tk)}
+.pb-seg button{border:0;background:transparent;color:var(--m);font:inherit;font-size:12px;font-weight:550;padding:3px 9px;border-radius:6px;cursor:pointer}
+.pb-seg button[aria-pressed=true]{background:var(--cd);color:inherit;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.pb-table{width:100%;border-collapse:collapse}
+.pb-table th{text-align:left;font-weight:500;color:var(--m);font-size:12px;padding:0 10px 8px 0}
+.pb-table td{padding:10px 10px 10px 0;border-top:1px solid var(--ln)}
+.pb-table .r{text-align:right}.pb-table tr>*:last-child{padding-right:0}
+.pb-ticker{display:inline-block;min-width:46px;text-align:center;font-weight:650;font-size:11px;letter-spacing:.02em;padding:3px 6px;border-radius:6px;background:var(--tk)}
+.pb-date{width:40px;flex:none;text-align:center;border-radius:9px;background:var(--tk);padding:4px 0;line-height:1.1}
+.pb-date b{display:block;font-size:15px}.pb-date small{font-size:10px;color:var(--m);text-transform:uppercase;letter-spacing:.04em}
+.pb-alert{display:flex;gap:12px;align-items:flex-start;padding:12px 20px}
+.pb-alert .pb-x{opacity:0;transition:opacity .12s}.pb-alert:hover .pb-x{opacity:1}
+.pb-notice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-radius:12px;
+background:color-mix(in srgb,var(--ac) 10%,transparent);border:1px solid color-mix(in srgb,var(--ac) 25%,transparent)}
+.pb-notice.err{background:color-mix(in srgb,var(--rd) 10%,transparent);border-color:color-mix(in srgb,var(--rd) 30%,transparent)}
+.pb-new{border:1.5px dashed var(--ln);border-radius:14px;background:transparent;color:var(--m);font:inherit;font-weight:550;cursor:pointer;min-height:180px}
+.pb-new:hover{color:var(--ac);border-color:var(--ac)}
+.pb-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.pb-step{display:flex;gap:12px;align-items:flex-start}
+.pb-step>b{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;background:var(--tk)}
+`
+
+// ---------- formatting ----------
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 const money = (c, whole) => (whole ? usd0 : usd).format((c || 0) / 100)
 const short = c => {
-  const d = (c || 0) / 100
-  return Math.abs(d) >= 1000 ? `$${(d / 1000).toFixed(1)}k` : `$${Math.round(d)}`
+  const d = (c || 0) / 100, a = Math.abs(d)
+  return a >= 1e6 ? `$${(d / 1e6).toFixed(1)}M` : a >= 1000 ? `$${(d / 1000).toFixed(a >= 1e4 ? 0 : 1)}k` : `$${Math.round(d)}`
 }
-const monthName = m => new Date(`${m}-15T12:00:00`).toLocaleString('en-US', { month: 'long' })
-const monthAbbr = m => new Date(`${m}-15T12:00:00`).toLocaleString('en-US', { month: 'short' })
-const day = iso => new Date(`${iso}T12:00:00`).toLocaleString('en-US', { month: 'short', day: 'numeric' })
+const signed = c => `${c >= 0 ? '+' : '-'}${money(Math.abs(c), true)}`
+const at = iso => new Date(`${iso.slice(0, 10)}T12:00:00`)
+const monthName = m => at(`${m}-15`).toLocaleString('en-US', { month: 'long' })
+const monthAbbr = m => at(`${m}-15`).toLocaleString('en-US', { month: 'short' })
+const day = iso => at(iso).toLocaleString('en-US', { month: 'short', day: 'numeric' })
+const longDay = iso => at(iso).toLocaleString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+const addDays = (iso, n) => { const d = at(iso); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 const ago = iso => {
   if (!iso) return 'never'
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
@@ -44,142 +132,344 @@ const ago = iso => {
   return `${Math.round(mins / 1440)} d ago`
 }
 
-const S = {
-  page: { display: 'flex', flexDirection: 'column', gap: 16, padding: '20px 24px 40px', maxWidth: 1080, margin: '0 auto',
-    fontSize: 13, lineHeight: 1.45, color: V.text, fontVariantNumeric: 'tabular-nums' },
-  card: { border: `1px solid ${V.line}`, borderRadius: 10, padding: 16, background: V.card, minWidth: 0 },
-  h2: { fontSize: 13, fontWeight: 600, margin: '0 0 12px' },
-  muted: { color: V.muted },
-  row: { display: 'flex', alignItems: 'center', gap: 10 },
-  grid: (min) => ({ display: 'grid', gap: 16, gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))` }),
-  btn: { border: `1px solid ${V.line}`, borderRadius: 7, padding: '5px 11px', background: 'transparent', color: 'inherit',
-    font: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' },
-  primary: { border: '1px solid transparent', borderRadius: 7, padding: '5px 11px', background: V.accent, color: 'var(--ui-accent-foreground, var(--color-primary-foreground, #fff))',
-    font: 'inherit', fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' },
-  input: { border: `1px solid ${V.line}`, borderRadius: 7, padding: '5px 9px', background: 'transparent', color: 'inherit',
-    font: 'inherit', minWidth: 0 }
+const EMOJI = { FOOD_AND_DRINK: '🍽️', GROCERIES: '🛒', GENERAL_MERCHANDISE: '🛍️', RENT_AND_UTILITIES: '🏠', TRANSPORTATION: '🚗',
+  TRAVEL: '✈️', ENTERTAINMENT: '🎬', PERSONAL_CARE: '💆', MEDICAL: '🩺', GENERAL_SERVICES: '🧰', HOME_IMPROVEMENT: '🔨',
+  GOVERNMENT_AND_NON_PROFIT: '🏛️', BANK_FEES: '🏦', LOAN_PAYMENTS: '💳', INCOME: '💰', TRANSFER_IN: '↘️', TRANSFER_OUT: '↗️', OTHER: '📦' }
+const emoji = cat => EMOJI[cat] || '🏷️'
+const hue = s => { let n = 0; for (const ch of s || '') n = (n * 31 + ch.charCodeAt(0)) % 360; return n }
+
+const ALERT_ICON = { large: '💸', unusual: '⚠️', duplicate: '⧉', new_merchant: '✨', subscription: '📈', bill: '📅', budget: '🎯', connection: '🔌', goal: '🏁' }
+
+// ---------- primitives ----------
+
+function Btn ({ primary, ghost, small, className, children, ...rest }) {
+  return h('button', { className: ['pb-btn', primary && 'primary', ghost && 'ghost', small && 'sm', className].filter(Boolean).join(' '), ...rest }, children)
 }
 
-function Button ({ primary, onClick, disabled, children, title }) {
-  return h('button', { style: { ...(primary ? S.primary : S.btn), opacity: disabled ? 0.5 : 1 }, onClick, disabled, title }, children)
-}
-
-function Card ({ title, right, children, style }) {
-  return h('section', { style: { ...S.card, ...style } },
-    (title || right) && h('div', { style: { ...S.row, justifyContent: 'space-between', marginBottom: 12 } },
-      h('h2', { style: { ...S.h2, margin: 0 } }, title), right),
+function Card ({ title, sub, action, right, children, flush, style }) {
+  return h('section', { className: `pb-card${flush ? ' flush' : ''}`, style },
+    (title || action || right) && h('header', { className: 'pb-card-h' },
+      h('div', null, title && h('h2', null, title), sub && h('div', { className: 'pb-muted pb-small', style: { marginTop: 2 } }, sub)),
+      h('div', { className: 'pb-flex' }, right, action && h('button', { className: 'pb-link', onClick: action[1] }, `${action[0]} →`))),
     children)
 }
 
-function Stat ({ label, value, sub, tone }) {
-  return h('div', { style: S.card },
-    h('div', { style: { ...S.muted, fontSize: 12 } }, label),
-    h('div', { style: { fontSize: 22, fontWeight: 600, margin: '4px 0 2px', color: tone || 'inherit' } }, value),
-    sub && h('div', { style: { ...S.muted, fontSize: 12 } }, sub))
+function Chip ({ tone = 'neutral', children }) { return h('span', { className: `pb-chip ${tone}` }, children) }
+
+// Spending deltas: more spending is bad. Wealth deltas: more is good.
+function Delta ({ cents, goodWhenUp, suffix }) {
+  if (cents == null) return null
+  const up = cents >= 0
+  return h(Chip, { tone: cents === 0 ? 'neutral' : up === !!goodWhenUp ? 'good' : 'bad' }, `${up ? '↑' : '↓'} ${money(Math.abs(cents), true)}${suffix ? ' ' + suffix : ''}`)
 }
 
-// ---------- charts (inline SVG, theme colors) ----------
-
-function PaceChart ({ pace, budget }) {
-  const W = 640, H = 220, L = 44, R = 12, T = 12, B = 26
-  const all = [...pace.current, ...pace.previous, budget || 0, 1]
-  const peak = Math.max(...all) * 1.08
-  const x = i => L + (W - L - R) * i / Math.max(1, pace.days - 1)
-  const y = v => T + (H - T - B) * (1 - v / peak)
-  const path = arr => arr.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => peak * f)
-  return h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', 'aria-label': 'Spending this month vs last month' },
-    ticks.map((t, i) => h('g', { key: i },
-      h('line', { x1: L, x2: W - R, y1: y(t), y2: y(t), stroke: V.line }),
-      h('text', { x: L - 6, y: y(t) + 4, textAnchor: 'end', fontSize: 10, fill: V.muted }, short(t)))),
-    budget ? h('g', null,
-      h('line', { x1: L, x2: W - R, y1: y(budget), y2: y(budget), stroke: V.yellow, strokeDasharray: '4 4' }),
-      h('text', { x: W - R, y: y(budget) - 5, textAnchor: 'end', fontSize: 10, fill: V.yellow }, `Budget ${short(budget)}`)) : null,
-    h('path', { d: path(pace.previous), fill: 'none', stroke: V.faint, strokeWidth: 2 }),
-    h('path', { d: path(pace.current), fill: 'none', stroke: V.accent, strokeWidth: 2.5, strokeLinejoin: 'round' }),
-    pace.current.length ? h('circle', { cx: x(pace.current.length - 1), cy: y(pace.current[pace.current.length - 1]), r: 3.5, fill: V.accent }) : null,
-    [1, 8, 15, 22, pace.days].map(d => h('text', { key: d, x: x(d - 1), y: H - 8, textAnchor: 'middle', fontSize: 10, fill: V.muted }, d)))
+function Avatar ({ name }) {
+  const n = hue(name)
+  return h('div', { className: 'pb-av', style: { background: `hsl(${n} 65% 55% / .16)`, color: `hsl(${n} 55% 45%)` } }, (name || '?').trim().charAt(0).toUpperCase())
 }
 
-function MonthsChart ({ months }) {
-  const W = 640, H = 200, L = 44, R = 12, T = 18, B = 26
-  const peak = Math.max(1, ...months.map(m => Math.max(m.spend_cents, m.income_cents))) * 1.1
-  const slot = (W - L - R) / months.length
-  const y = v => T + (H - T - B) * (1 - v / peak)
-  return h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', 'aria-label': 'Monthly spending' },
-    [0, 0.5, 1].map((f, i) => h('g', { key: i },
-      h('line', { x1: L, x2: W - R, y1: y(peak * f), y2: y(peak * f), stroke: V.line }),
-      h('text', { x: L - 6, y: y(peak * f) + 4, textAnchor: 'end', fontSize: 10, fill: V.muted }, short(peak * f)))),
-    months.map((m, i) => {
-      const cx = L + slot * (i + 0.5)
-      const top = y(m.spend_cents)
-      return h('g', { key: m.month },
-        h('title', null, `${monthName(m.month)}: spent ${money(m.spend_cents, true)}, income ${money(m.income_cents, true)}`),
-        h('rect', { x: cx - slot * 0.28, width: slot * 0.56, y: top, height: Math.max(0, H - B - top), rx: 4,
-          fill: V.accent, opacity: m.partial ? 0.45 : 1 }),
-        h('text', { x: cx, y: top - 5, textAnchor: 'middle', fontSize: 10, fill: V.muted }, short(m.spend_cents)),
-        m.income_cents ? h('circle', { cx, cy: y(m.income_cents), r: 3.5, fill: V.green }) : null,
-        h('text', { x: cx, y: H - 8, textAnchor: 'middle', fontSize: 10, fill: V.muted }, monthAbbr(m.month)))
-    }))
+function Bar ({ pct, color, ghost, tick, thin }) {
+  return h('div', { className: `pb-bar${thin ? ' thin' : ''}`, style: { overflow: tick != null ? 'visible' : 'hidden' } },
+    ghost != null && ghost > pct && h('i', { style: { width: `${Math.min(100, ghost)}%`, background: color, opacity: 0.22 } }),
+    h('i', { style: { width: `${Math.max(0, Math.min(100, pct))}%`, background: color } }),
+    tick != null && h('span', { className: 'pb-tick', style: { left: `calc(${Math.min(100, tick)}% - 1px)` } }))
 }
 
-// ---------- sections ----------
-
-function Setup ({ setup, act, busy }) {
-  const ready = setup.plaid_configured
-  return h(Card, { title: 'Connect your money' },
-    h('ol', { style: { margin: '0 0 14px', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 } },
-      h('li', null, 'Create free Plaid keys at dashboard.plaid.com (Developers → Keys).'),
-      h('li', null, 'Paste them in Settings → Plugins → pocketbook. ',
-        h('span', { style: { color: ready ? V.green : V.muted } }, ready ? `Keys found (${setup.plaid_env}).` : 'No keys yet.')),
-      h('li', null, 'Connect a bank. Pocketbook syncs two years of history and proposes budgets from it.')),
-    h('div', { style: { ...S.row, flexWrap: 'wrap' } },
-      h(Button, { primary: true, disabled: !ready || busy, onClick: () => act('connect') }, 'Connect a bank'),
-      setup.plaid_env === 'sandbox' && h(Button, { disabled: !ready || busy, onClick: () => act('test-bank') }, 'Add Plaid test bank'),
-      h(Button, { disabled: busy, onClick: () => act('demo') }, 'Try sample data')),
-    setup.linking && h('div', { style: { ...S.row, marginTop: 12 } },
-      h('span', { style: S.muted }, 'Finished signing in to your bank?'),
-      h(Button, { primary: true, disabled: busy, onClick: () => act('finish') }, 'Finish connecting')))
+function Seg ({ value, onChange, items }) {
+  return h('div', { className: 'pb-seg' }, items.map(([k, l]) => h('button', { key: k, 'aria-pressed': value === k, onClick: () => onChange(k) }, l)))
 }
 
-const KIND = { large: 'Large purchase', unusual: 'Unusual charge', duplicate: 'Double charge', new_merchant: 'New merchant',
-  subscription: 'Price increase', bill: 'Bill due', budget: 'Budget', connection: 'Connection', goal: 'Goal' }
+function Ring ({ pct, color, size = 64 }) {
+  const r = (size - 7) / 2, c = 2 * Math.PI * r
+  return h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}`, style: { flex: 'none' } },
+    h('circle', { cx: size / 2, cy: size / 2, r, fill: 'none', strokeWidth: 6, style: { stroke: 'var(--tk)' } }),
+    h('circle', { cx: size / 2, cy: size / 2, r, fill: 'none', strokeWidth: 6, strokeLinecap: 'round',
+      strokeDasharray: `${c * Math.min(100, pct) / 100} ${c}`, transform: `rotate(-90 ${size / 2} ${size / 2})`, style: { stroke: color } }),
+    h('text', { x: '50%', y: '50%', dy: '.35em', textAnchor: 'middle', fontSize: 13, fontWeight: 650, style: { fill: 'currentColor' } }, `${Math.round(pct)}%`))
+}
 
-function Alerts ({ alerts, act, showTxns }) {
-  if (!alerts.length) {
-    return h(Card, { title: 'Needs a look' }, h('div', { style: S.muted }, 'Nothing unusual. Pocketbook will tell you when something changes.'))
+// ---------- charts ----------
+
+function niceTicks (lo, hi, count = 4) {
+  const raw = Math.max(1, hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => raw <= s)
+  const out = []
+  for (let v = Math.floor(lo / step) * step; v < hi + step; v += step) out.push(v)
+  return out
+}
+
+function useWidth () {
+  const [w, setW] = useState(720)
+  const [el, setEl] = useState(null)
+  useEffect(() => {
+    if (!el) return
+    const ro = new ResizeObserver(([e]) => setW(Math.max(280, Math.round(e.contentRect.width))))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [el])
+  return [w, setEl]
+}
+
+function useHover (n, W, L, R) {
+  const [hi, setHi] = useState(null)
+  const onMouseMove = e => {
+    const r = e.currentTarget.getBoundingClientRect()
+    const fx = (e.clientX - r.left) / r.width * W
+    setHi(Math.max(0, Math.min(n - 1, Math.round((fx - L) / (W - L - R) * Math.max(1, n - 1)))))
   }
-  return h(Card, { title: `Needs a look (${alerts.length})`, right: h(Button, { onClick: () => act('dismiss', { keys: null }) }, 'Clear all') },
-    h('div', { style: { display: 'flex', flexDirection: 'column' } },
-      alerts.map((a, i) => h('div', { key: a.key, style: { ...S.row, alignItems: 'flex-start', padding: '10px 0', borderTop: i ? `1px solid ${V.line}` : 'none' } },
-        h('span', { style: { width: 8, height: 8, borderRadius: 4, marginTop: 6, flex: 'none', background: a.severity === 'warn' ? V.yellow : V.accent } }),
-        h('div', { style: { flex: 1, minWidth: 0 } },
-          h('div', { style: { fontWeight: 500 } }, a.title),
-          h('div', { style: S.muted }, `${KIND[a.kind] || a.kind} · ${a.detail}`)),
-        a.txn_ids.length ? h(Button, { onClick: () => showTxns(a.txn_ids, a.title) }, 'Show') : null,
-        h(Button, { onClick: () => act('dismiss', { keys: [a.key] }), title: 'Dismiss' }, '✕')))))
+  return [hi, { onMouseMove, onMouseLeave: () => setHi(null) }]
 }
 
-function BudgetRow ({ b }) {
-  const scale = Math.max(b.budget_cents, b.spent_cents, b.projected_cents) || 1
-  const color = b.status === 'over' ? V.red : b.status === 'warn' ? V.yellow : V.accent
-  const note = b.status === 'over' ? `over by ${money(-b.remaining_cents, true)}`
-    : b.status === 'warn' ? `on pace for ${money(b.projected_cents, true)}` : `${money(b.remaining_cents, true)} left`
-  return h('div', { style: { padding: '7px 0' } },
-    h('div', { style: { ...S.row, justifyContent: 'space-between', marginBottom: 5 } },
-      h('span', { style: { fontWeight: 500 } }, b.label),
-      h('span', null, `${money(b.spent_cents, true)} `, h('span', { style: S.muted }, `of ${money(b.budget_cents, true)} · `),
-        h('span', { style: { color: b.status === 'ok' ? V.muted : color } }, note))),
-    h('div', { style: { position: 'relative', height: 8, borderRadius: 4, background: V.track } },
-      h('div', { style: { position: 'absolute', inset: 0, width: `${Math.min(100, 100 * b.spent_cents / scale)}%`, borderRadius: 4, background: color } }),
-      b.projected_cents > b.spent_cents && h('div', { style: { position: 'absolute', top: 0, bottom: 0, left: `${Math.min(100, 100 * b.spent_cents / scale)}%`,
-        width: `${Math.min(100, 100 * (b.projected_cents - b.spent_cents) / scale)}%`, background: color, opacity: 0.25 } }),
-      h('div', { style: { position: 'absolute', top: -3, bottom: -3, width: 2, left: `calc(${100 * b.budget_cents / scale}% - 1px)`, background: 'currentColor', opacity: 0.6 } })))
+function Tip ({ x, W, title, rows }) {
+  const right = x > W * 0.6
+  return h('div', { className: 'pb-tip', style: { left: `${100 * x / W}%`, transform: right ? 'translateX(calc(-100% - 14px))' : 'translateX(14px)' } },
+    h('div', { className: 'pb-strong', style: { marginBottom: 4 } }, title),
+    rows.map(([color, label, value], i) => h('div', { key: i, className: 'pb-tip-row' },
+      h('span', { className: 'pb-flex', style: { gap: 6 } }, color && h('span', { className: 'pb-dot', style: { background: color } }), h('span', { className: 'pb-muted' }, label)),
+      h('span', { className: 'pb-strong' }, value))))
 }
+
+// Line/area chart over an index. Each series: { values, color, area, dashed }.
+function LineChart ({ n, series, guide, xTicks, tip, zero = true, height = 220 }) {
+  const id = useMemo(() => 'pb' + Math.random().toString(36).slice(2, 8), [])
+  const [W, ref] = useWidth()
+  const H = height, L = 4, R = 48, T = 10, B = 26
+  const [hi, hover] = useHover(n, W, L, R)
+  const vals = series.flatMap(s => s.values).concat(guide ? [guide.value] : [])
+  let lo = zero ? 0 : Math.min(...vals), top = Math.max(1, ...vals)
+  if (!zero) { const p = Math.max(5000, (top - lo) * 0.1); lo -= p; top += p }
+  const ticks = niceTicks(lo, top)
+  lo = ticks[0]; top = ticks[ticks.length - 1]
+  const x = i => L + (W - L - R) * i / Math.max(1, n - 1)
+  const y = v => T + (H - T - B) * (1 - (v - lo) / (top - lo || 1))
+  const path = a => a.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
+  const t = hi != null && tip(hi)
+  return h('div', { className: 'pb-chart', ref },
+    h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', ...hover, style: { cursor: 'crosshair' } },
+      h('defs', null, series.map((s, k) => h('linearGradient', { key: k, id: `${id}${k}`, x1: 0, x2: 0, y1: 0, y2: 1 },
+        h('stop', { offset: '0%', style: { stopColor: s.color, stopOpacity: 0.28 } }),
+        h('stop', { offset: '100%', style: { stopColor: s.color, stopOpacity: 0 } })))),
+      ticks.map((v, i) => h('g', { key: i },
+        h('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), strokeDasharray: i ? '2 4' : null, style: { stroke: 'var(--ln)' } }),
+        h('text', { x: W - R + 8, y: y(v) + 4, fontSize: 11, style: { fill: 'var(--m)' } }, short(v)))),
+      xTicks.map(([i, label]) => h('text', { key: i, x: x(i), y: H - 6, fontSize: 11, textAnchor: i === 0 ? 'start' : i >= n - 1 ? 'end' : 'middle', style: { fill: 'var(--m)' } }, label)),
+      guide && h('g', null,
+        h('line', { x1: L, x2: W - R, y1: y(guide.value), y2: y(guide.value), strokeDasharray: '5 4', strokeWidth: 1.5, style: { stroke: guide.color } }),
+        h('text', { x: L + 2, y: y(guide.value) - 6, fontSize: 11, fontWeight: 600, style: { fill: guide.color } }, guide.label)),
+      series.map((s, k) => s.values.length > 1 && h('g', { key: k },
+        s.area && h('path', { d: `${path(s.values)}L${x(s.values.length - 1)},${y(lo)}L${x(0)},${y(lo)}Z`, fill: `url(#${id}${k})` }),
+        h('path', { d: path(s.values), fill: 'none', strokeWidth: s.dashed ? 1.75 : 2.5, strokeDasharray: s.dashed ? '4 4' : null,
+          strokeLinejoin: 'round', strokeLinecap: 'round', style: { stroke: s.color, opacity: s.dashed ? 0.7 : 1 } }),
+        s.dot && h('circle', { cx: x(s.values.length - 1), cy: y(s.values[s.values.length - 1]), r: 4.5, strokeWidth: 2.5, style: { fill: 'var(--cd)', stroke: s.color } }))),
+      hi != null && h('g', null,
+        h('line', { x1: x(hi), x2: x(hi), y1: T, y2: H - B, style: { stroke: 'var(--m)', opacity: 0.4 } }),
+        series.map((s, k) => s.values[hi] != null && h('circle', { key: k, cx: x(hi), cy: y(s.values[hi]), r: 4, strokeWidth: 2, style: { fill: 'var(--cd)', stroke: s.color } })))),
+    t && h(Tip, { x: x(hi), W, ...t }))
+}
+
+function CashFlowChart ({ months }) {
+  const [W, ref] = useWidth()
+  const H = 240, L = 4, R = 48, T = 10, B = 26
+  const n = months.length
+  const [hi, hover] = useHover(n, W, L + (W - L - R) / n / 2, R + (W - L - R) / n / 2)
+  const ticks = niceTicks(0, Math.max(1, ...months.flatMap(m => [m.spend_cents, m.income_cents])))
+  const top = ticks[ticks.length - 1]
+  const slot = (W - L - R) / n, bw = Math.min(28, slot * 0.26)
+  const y = v => T + (H - T - B) * (1 - v / top)
+  const m = hi != null && months[hi]
+  return h('div', { className: 'pb-chart', ref },
+    h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', ...hover },
+      ticks.map((v, i) => h('g', { key: i },
+        h('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), strokeDasharray: i ? '2 4' : null, style: { stroke: 'var(--ln)' } }),
+        h('text', { x: W - R + 8, y: y(v) + 4, fontSize: 11, style: { fill: 'var(--m)' } }, short(v)))),
+      months.map((mo, i) => {
+        const cx = L + slot * (i + 0.5)
+        return h('g', { key: mo.month, opacity: hi == null || hi === i ? 1 : 0.45 },
+          h('rect', { x: cx - slot / 2 + 2, width: slot - 4, y: T, height: H - T - B, rx: 8, style: { fill: hi === i ? 'var(--hv)' : 'transparent' } }),
+          h('rect', { x: cx - bw - 2, width: bw, y: y(mo.income_cents), height: Math.max(0, H - B - y(mo.income_cents)), rx: 5, style: { fill: 'var(--gn)', opacity: mo.partial ? 0.55 : 1 } }),
+          h('rect', { x: cx + 2, width: bw, y: y(mo.spend_cents), height: Math.max(0, H - B - y(mo.spend_cents)), rx: 5, style: { fill: 'var(--ac)', opacity: mo.partial ? 0.55 : 1 } }),
+          h('text', { x: cx, y: H - 6, fontSize: 11, textAnchor: 'middle', style: { fill: 'var(--m)' } }, monthAbbr(mo.month)))
+      })),
+    m && h(Tip, { x: L + slot * (hi + 0.5), W, title: `${monthName(m.month)}${m.partial ? ' so far' : ''}`, rows: [
+      ['var(--gn)', 'Income', money(m.income_cents, true)],
+      ['var(--ac)', 'Spending', money(m.spend_cents, true)],
+      [null, 'Saved', signed(m.income_cents - m.spend_cents)]] }))
+}
+
+function Sparkline ({ values, color = 'var(--ac)' }) {
+  if (values.length < 2) return null
+  const W = 300, H = 56
+  const lo = Math.min(...values), hi = Math.max(...values)
+  const x = i => W * i / (values.length - 1)
+  const y = v => 4 + (H - 8) * (1 - (v - lo) / (hi - lo || 1))
+  const d = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
+  return h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, preserveAspectRatio: 'none', style: { display: 'block' } },
+    h('path', { d: `${d}L${W},${H}L0,${H}Z`, style: { fill: color, opacity: 0.1 } }),
+    h('path', { d, fill: 'none', strokeWidth: 2, vectorEffect: 'non-scaling-stroke', style: { stroke: color } }))
+}
+
+// ---------- shared pieces ----------
+
+const budgetTone = b => b.status === 'over' ? 'var(--rd)' : b.status === 'warn' ? 'var(--yl)' : 'var(--ac)'
+const budgetNote = b => b.status === 'over' ? [`${money(-b.remaining_cents, true)} over`, 'pb-bad']
+  : b.status === 'warn' ? [`on pace for ${money(b.projected_cents, true)}`, 'pb-warn'] : [`${money(b.remaining_cents, true)} left`, 'pb-muted']
+
+function TxnRow ({ t, sub, categories, api, onChanged }) {
+  const [edit, setEdit] = useState(false)
+  const [pick, setPick] = useState(null)
+  const apply = async all => {
+    await api('/transactions/category', { method: 'POST', body: { id: t.id, category: pick, all_from_merchant: all } })
+    setPick(null); setEdit(false); onChanged && onChanged()
+  }
+  const income = t.amount_cents < 0
+  return h('div', { className: 'pb-row' },
+    h(Avatar, { name: t.merchant }),
+    h('div', { className: 'pb-grow' },
+      h('div', { className: 'pb-strong pb-ellipsis' }, t.merchant, t.pending && h('span', { style: { marginLeft: 8 } }, h(Chip, null, 'Pending'))),
+      h('div', { className: 'pb-muted pb-small pb-ellipsis' }, sub)),
+    pick ? h('div', { className: 'pb-flex', style: { gap: 6 } },
+      h('span', { className: 'pb-muted pb-small' }, `Move to ${categories[pick]}:`),
+      h(Btn, { small: true, onClick: () => apply(false) }, 'This one'),
+      h(Btn, { small: true, primary: true, onClick: () => apply(true) }, `Every ${t.merchant}`),
+      h(Btn, { small: true, ghost: true, onClick: () => { setPick(null); setEdit(false) } }, 'Cancel'))
+      : edit ? h('select', { className: 'pb-input pb-small', autoFocus: true, defaultValue: t.category,
+        onBlur: () => setEdit(false), onChange: e => setPick(e.target.value) },
+      Object.entries(categories).map(([k, l]) => h('option', { key: k, value: k }, `${emoji(k)} ${l}`)))
+        : h('button', { className: 'pb-cat', title: 'Change category', onClick: () => setEdit(true) }, `${emoji(t.category)} ${t.category_label}`),
+    h('div', { className: `pb-amt${income ? ' pb-good' : ''}` }, income ? `+${money(-t.amount_cents)}` : money(t.amount_cents)))
+}
+
+function TxnList ({ rows, today, grouped, ...rest }) {
+  if (!rows.length) return h('div', { className: 'pb-muted', style: { padding: '8px 20px 20px' } }, 'No matching transactions.')
+  const label = d => d === today ? 'Today' : d === addDays(today, -1) ? 'Yesterday' : longDay(d)
+  const out = []
+  let last = null
+  for (const t of rows) {
+    if (grouped && t.date !== last) {
+      const net = rows.filter(r => r.date === t.date).reduce((s, r) => s + r.amount_cents, 0)
+      out.push(h('div', { key: `d${t.date}`, className: 'pb-day' }, h('span', null, label(t.date)), h('span', null, net > 0 ? money(net) : `+${money(-net)}`)))
+      last = t.date
+    }
+    out.push(h(TxnRow, { key: t.id, t, sub: grouped ? t.account : `${day(t.date)} · ${t.account}`, ...rest }))
+  }
+  return h('div', { className: grouped ? '' : 'pb-list', style: { paddingBottom: 8 } }, out)
+}
+
+// ---------- overview ----------
+
+function SpendingCard ({ o, pace, budget }) {
+  const delta = o.spent_cents - o.spent_same_point_last_month_cents
+  const prevName = monthName(o.month.slice(0, 5) + String(((+o.month.slice(5) + 10) % 12) + 1).padStart(2, '0'))
+  const n = Math.max(pace.days, pace.previous.length)
+  return h(Card, null,
+    h('div', { className: 'pb-flex pb-between pb-wrap', style: { alignItems: 'flex-start' } },
+      h('div', null,
+        h('div', { className: 'pb-eyebrow' }, `Spent in ${monthName(o.month)}`),
+        h('div', { className: 'pb-hero' }, money(o.spent_cents, true)),
+        h('div', { className: 'pb-flex', style: { gap: 8 } }, h(Delta, { cents: delta }),
+          h('span', { className: 'pb-muted' }, `vs this point in ${prevName}`))),
+      h('div', { className: 'pb-legend', style: { marginTop: 4 } },
+        h('span', null, h('span', { className: 'pb-dot', style: { background: 'var(--ac)' } }), 'This month'),
+        h('span', null, h('span', { className: 'pb-dot', style: { background: 'var(--m)' } }), prevName),
+        budget ? h('span', null, h('span', { className: 'pb-dot', style: { background: 'var(--yl)' } }), 'Budget') : null)),
+    h('div', { style: { marginTop: 16 } },
+      h(LineChart, { n, series: [
+        { values: pace.previous, color: 'var(--m)', dashed: true },
+        { values: pace.current, color: 'var(--ac)', area: true, dot: true }],
+      guide: budget ? { value: budget, color: 'var(--yl)', label: `Budget ${short(budget)}` } : null,
+      xTicks: [[0, '1'], [7, '8'], [14, '15'], [21, '22'], [n - 1, String(n)]],
+      tip: i => ({ title: `Day ${i + 1}`, rows: [
+        pace.current[i] != null && ['var(--ac)', monthName(o.month), money(pace.current[i], true)],
+        pace.previous[i] != null && ['var(--m)', prevName, money(pace.previous[i], true)]].filter(Boolean) }) })))
+}
+
+function AlertsCard ({ alerts, act, showTxns }) {
+  const [all, setAll] = useState(false)
+  if (!alerts.length) return null
+  const shown = all ? alerts : alerts.slice(0, 4)
+  return h(Card, { flush: true, title: 'Needs your attention', sub: `${alerts.length} open`,
+    right: h(Btn, { small: true, ghost: true, onClick: () => act('dismiss', { keys: null }) }, 'Clear all') },
+  h('div', { className: 'pb-list', style: { paddingBottom: 6 } },
+    shown.map(a => h('div', { key: a.key, className: 'pb-alert' },
+      h('div', { className: 'pb-tile', style: { background: a.severity === 'warn' ? 'color-mix(in srgb,var(--yl) 16%,transparent)' : undefined } }, ALERT_ICON[a.kind] || '•'),
+      h('div', { className: 'pb-grow' },
+        h('div', { className: 'pb-strong' }, a.title),
+        h('div', { className: 'pb-muted pb-small' }, a.detail)),
+      h('div', { className: 'pb-flex', style: { gap: 4 } },
+        a.txn_ids.length ? h(Btn, { small: true, onClick: () => showTxns(a.txn_ids, a.title) }, 'Review') : null,
+        h(Btn, { small: true, ghost: true, className: 'pb-x', title: 'Dismiss', onClick: () => act('dismiss', { keys: [a.key] }) }, '✕')))),
+    alerts.length > 4 && h('div', { style: { padding: '10px 20px 14px', borderTop: '1px solid var(--ln)' } },
+      h('button', { className: 'pb-link', onClick: () => setAll(!all) }, all ? 'Show fewer' : `Show ${alerts.length - 4} more`))))
+}
+
+function BudgetMini ({ b, go, act, busy }) {
+  if (!b.budgets.length) {
+    return h(Card, { title: 'Budget' },
+      h('div', { className: 'pb-muted', style: { marginBottom: 12 } }, b.proposed.length
+        ? `Hermes proposed ${b.proposed.length} budgets from your last three months.` : 'No budgets yet. Hermes can propose them from your history.'),
+      b.proposed.length ? h(Btn, { primary: true, onClick: go }, 'Review proposals') : h(Btn, { primary: true, disabled: busy, onClick: () => act('propose') }, 'Propose budgets'))
+  }
+  const left = b.total_budget_cents - b.total_spent_cents
+  const elapsed = 100 * b.days_elapsed / b.days_in_month
+  return h(Card, { title: 'Budget', action: ['Details', go] },
+    h('div', { className: 'pb-eyebrow' }, left >= 0 ? 'Left to spend' : 'Over budget'),
+    h('div', { className: `pb-hero md${left < 0 ? ' pb-bad' : ''}` }, money(Math.abs(left), true)),
+    h(Bar, { pct: 100 * b.total_spent_cents / b.total_budget_cents, color: left < 0 ? 'var(--rd)' : 'var(--ac)', tick: elapsed }),
+    h('div', { className: 'pb-muted pb-small pb-flex pb-between', style: { marginTop: 6 } },
+      h('span', null, `${money(b.total_spent_cents, true)} of ${money(b.total_budget_cents, true)}`),
+      h('span', null, `${b.days_in_month - b.days_elapsed} days left`)),
+    h('div', { style: { marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 } },
+      b.budgets.slice(0, 4).map(x => {
+        const [note, cls] = budgetNote(x)
+        return h('div', { key: x.category },
+          h('div', { className: 'pb-flex pb-between pb-small', style: { marginBottom: 5 } },
+            h('span', { className: 'pb-flex', style: { gap: 6 } }, emoji(x.category), h('span', { className: 'pb-strong' }, x.label)),
+            h('span', { className: cls }, note)),
+          h(Bar, { thin: true, pct: x.pct, color: budgetTone(x) }))
+      })))
+}
+
+function NetWorthMini ({ nw, go }) {
+  return h(Card, { title: 'Net worth', action: ['Details', go] },
+    h('div', { className: 'pb-flex pb-between' },
+      h('div', { className: 'pb-hero md' }, money(nw.net_cents, true)),
+      h(Delta, { cents: nw.change_30d_cents, goodWhenUp: true, suffix: '30d' })),
+    h('div', { style: { margin: '6px -4px 10px' } }, h(Sparkline, { values: nw.history.slice(-90).map(p => p.net_cents) })),
+    h('div', { className: 'pb-flex pb-between pb-small' }, h('span', { className: 'pb-muted' }, 'Assets'), h('span', { className: 'pb-strong' }, money(nw.assets_cents, true))),
+    h('div', { className: 'pb-flex pb-between pb-small', style: { marginTop: 4 } }, h('span', { className: 'pb-muted' }, 'Liabilities'), h('span', { className: 'pb-strong' }, money(nw.liabilities_cents, true))))
+}
+
+function Upcoming ({ bills, today }) {
+  return h(Card, { title: 'Upcoming', sub: 'Next 14 days' },
+    bills.length ? h('div', { className: 'pb-list' }, bills.map(r => {
+      const raised = r.last_cents > r.previous_cents
+      const inDays = Math.round((at(r.next_date) - at(today)) / 864e5)
+      return h('div', { key: r.merchant, className: 'pb-row' },
+        h('div', { className: 'pb-date' }, h('small', null, monthAbbr(r.next_date.slice(0, 7))), h('b', null, +r.next_date.slice(8))),
+        h('div', { className: 'pb-grow' },
+          h('div', { className: 'pb-strong pb-ellipsis' }, r.merchant),
+          h('div', { className: 'pb-muted pb-small' }, inDays <= 0 ? 'Due today' : inDays === 1 ? 'Tomorrow' : `In ${inDays} days`, ` · ${r.cadence}`)),
+        h('div', { className: 'pb-amt' }, money(r.last_cents), raised && h('div', { className: 'pb-small pb-warn' }, `was ${money(r.previous_cents)}`)))
+    })) : h('div', { className: 'pb-muted' }, 'Nothing due soon.'))
+}
+
+function GoalsMini ({ goals, go }) {
+  if (!goals.length) return null
+  return h(Card, { title: 'Goals', action: ['All goals', go] },
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } }, goals.slice(0, 3).map(g =>
+      h('div', { key: g.id },
+        h('div', { className: 'pb-flex pb-between pb-small', style: { marginBottom: 5 } },
+          h('span', { className: 'pb-strong' }, g.name),
+          h('span', { className: 'pb-muted' }, `${money(g.current_cents, true)} of ${money(g.target_cents, true)}`)),
+        h(Bar, { thin: true, pct: g.pct, color: GOAL_STATUS[g.status]?.[2] || 'var(--ac)' })))))
+}
+
+// ---------- budget ----------
 
 function Proposals ({ proposed, act, busy }) {
   const [edits, setEdits] = useState({})
   if (!proposed.length) return null
+  const total = proposed.reduce((s, p) => s + (edits[p.category] !== undefined && edits[p.category] !== '' ? Math.round(Number(edits[p.category]) * 100) : p.proposed_cents), 0)
   const save = async () => {
     const changed = proposed.filter(p => {
       const v = edits[p.category]
@@ -190,133 +480,216 @@ function Proposals ({ proposed, act, busy }) {
     if (rest.length) await act('approve', { categories: rest })
     else await act('refresh')
   }
-  return h('div', { style: { marginTop: 8 } },
-    h('div', { style: { ...S.muted, marginBottom: 8 } }, 'Proposed from your last three months. Adjust any amount, then approve.'),
-    proposed.map(p => h('div', { key: p.category, style: { ...S.row, padding: '5px 0' } },
-      h('span', { style: { flex: 1, fontWeight: 500 } }, p.label),
-      h('span', { style: { ...S.muted, flex: 2, fontSize: 12 } }, p.basis),
-      h('span', { style: S.muted }, '$'),
-      h('input', { style: { ...S.input, width: 80, textAlign: 'right' }, inputMode: 'decimal',
-        value: edits[p.category] ?? String(Math.round(p.proposed_cents / 100)),
-        onChange: e => setEdits({ ...edits, [p.category]: e.target.value }) }))),
-    h('div', { style: { ...S.row, justifyContent: 'flex-end', marginTop: 10 } },
-      h(Button, { primary: true, disabled: busy, onClick: save }, 'Approve budgets')))
+  return h(Card, { flush: true, title: 'Proposed by Hermes', sub: 'Based on your typical month over the last three. Adjust any amount, then approve.',
+    right: h(Chip, { tone: 'accent' }, `${money(total, true)} / month`) },
+  h('div', { className: 'pb-list' }, proposed.map(p => h('div', { key: p.category, className: 'pb-row' },
+    h('div', { className: 'pb-tile' }, emoji(p.category)),
+    h('div', { className: 'pb-grow' }, h('div', { className: 'pb-strong' }, p.label), h('div', { className: 'pb-muted pb-small' }, p.basis)),
+    h('span', { className: 'pb-muted' }, '$'),
+    h('input', { className: 'pb-input', style: { width: 96, textAlign: 'right' }, inputMode: 'decimal',
+      value: edits[p.category] ?? String(Math.round(p.proposed_cents / 100)),
+      onChange: e => setEdits({ ...edits, [p.category]: e.target.value }) })))),
+  h('div', { className: 'pb-flex', style: { justifyContent: 'flex-end', padding: '12px 20px 16px', borderTop: '1px solid var(--ln)' } },
+    h(Btn, { primary: true, disabled: busy, onClick: save }, `Approve ${proposed.length} budgets`)))
 }
 
-function Budgets ({ budgets, act, busy }) {
-  const has = budgets.budgets.length > 0
-  return h(Card, {
-    title: has ? `Budgets · ${money(budgets.total_spent_cents, true)} of ${money(budgets.total_budget_cents, true)}` : 'Budgets',
-    right: h(Button, { disabled: busy, onClick: () => act('propose') }, has ? 'Re-propose' : 'Propose budgets')
-  },
-  !has && !budgets.proposed.length && h('div', { style: S.muted }, 'No budgets yet. Pocketbook can propose them from your spending history.'),
-  budgets.budgets.map(b => h(BudgetRow, { key: b.category, b })),
-  h(Proposals, { proposed: budgets.proposed, act, busy }))
+function BudgetPage ({ b, act, busy }) {
+  const has = b.budgets.length > 0
+  const left = b.total_budget_cents - b.total_spent_cents
+  const elapsed = 100 * b.days_elapsed / b.days_in_month
+  return h('div', { className: 'pb-col' },
+    has && h(Card, null,
+      h('div', { className: 'pb-stats' },
+        h('div', null, h('div', { className: 'pb-eyebrow' }, left >= 0 ? 'Left to spend' : 'Over budget'), h('div', { className: `pb-hero${left < 0 ? ' pb-bad' : ''}` }, money(Math.abs(left), true))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Budgeted'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, money(b.total_budget_cents, true))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Spent'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, money(b.total_spent_cents, true))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Not budgeted'), h('div', { className: 'pb-hero md', style: { marginTop: 6 } }, money(b.unbudgeted_spend_cents, true)))),
+      h('div', { style: { marginTop: 14 } }, h(Bar, { pct: 100 * b.total_spent_cents / b.total_budget_cents, color: left < 0 ? 'var(--rd)' : 'var(--ac)', tick: elapsed })),
+      h('div', { className: 'pb-muted pb-small', style: { marginTop: 6 } }, `Day ${b.days_elapsed} of ${b.days_in_month}. The tick marks where an even pace would be.`)),
+    has && h(Card, { flush: true, title: 'Categories', right: h(Btn, { small: true, disabled: busy, onClick: () => act('propose') }, 'Re-propose') },
+      h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, b.budgets.map(x => {
+        const [note, cls] = budgetNote(x)
+        const scale = Math.max(x.budget_cents, x.spent_cents, x.projected_cents)
+        return h('div', { key: x.category, className: 'pb-row', style: { alignItems: 'center' } },
+          h('div', { className: 'pb-tile' }, emoji(x.category)),
+          h('div', { className: 'pb-grow' },
+            h('div', { className: 'pb-flex pb-between', style: { marginBottom: 6 } },
+              h('span', { className: 'pb-strong' }, x.label),
+              h('span', null, h('span', { className: 'pb-strong' }, money(x.spent_cents, true)), h('span', { className: 'pb-muted' }, ` of ${money(x.budget_cents, true)}`))),
+            h(Bar, { pct: 100 * x.spent_cents / scale, ghost: 100 * x.projected_cents / scale, tick: 100 * x.budget_cents / scale, color: budgetTone(x) }),
+            h('div', { className: `pb-small ${cls}`, style: { marginTop: 5 } }, note,
+              x.status !== 'over' && x.projected_cents > x.spent_cents ? h('span', { className: 'pb-muted' }, x.status === 'ok' ? ` · on pace for ${money(x.projected_cents, true)}` : '') : null)))
+      }))),
+    h(Proposals, { proposed: b.proposed, act, busy }),
+    !has && !b.proposed.length && h(Card, { title: 'No budgets yet' },
+      h('div', { className: 'pb-muted', style: { marginBottom: 12 } }, 'Hermes looks at your last three months and proposes an amount for each category. Nothing applies until you approve it.'),
+      h(Btn, { primary: true, disabled: busy, onClick: () => act('propose') }, 'Propose budgets')))
 }
 
-function Transactions ({ initial, api, filter, clearFilter, categories, onChanged }) {
-  const [q, setQ] = useState('')
-  const [rows, setRows] = useState(initial)
-  useEffect(() => {
-    if (filter) { api(`/transactions?ids=${encodeURIComponent(filter.ids.join(','))}`).then(r => setRows(r.transactions)).catch(() => {}); return }
-    if (!q) { setRows(initial); return }
-    const t = setTimeout(() => api(`/transactions?query=${encodeURIComponent(q)}&limit=100`).then(r => setRows(r.transactions)).catch(() => {}), 250)
-    return () => clearTimeout(t)
-  }, [q, filter, initial])
-  return h(Card, {
-    title: filter ? filter.title : 'Transactions',
-    right: filter ? h(Button, { onClick: clearFilter }, 'Show all')
-      : h('input', { style: { ...S.input, width: 200 }, placeholder: 'Search merchants…', value: q, onChange: e => setQ(e.target.value) })
-  },
-  h('div', { style: { overflowX: 'auto' } },
-    h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-      h('tbody', null, rows.map(t => h('tr', { key: t.id, style: { borderTop: `1px solid ${V.line}` } },
-        h('td', { style: { padding: '7px 8px 7px 0', ...S.muted, whiteSpace: 'nowrap' } }, day(t.date)),
-        h('td', { style: { padding: '7px 8px', fontWeight: 500 } }, t.merchant, t.pending && h('span', { style: { ...S.muted, fontWeight: 400 } }, ' · pending')),
-        h('td', { style: { padding: '7px 8px', ...S.muted } }, h(CategoryCell, { t, categories, api, onChanged })),
-        h('td', { style: { padding: '7px 8px', ...S.muted, whiteSpace: 'nowrap' } }, t.account),
-        h('td', { style: { padding: '7px 0 7px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: t.amount_cents < 0 ? V.green : 'inherit' } },
-          t.amount_cents < 0 ? `+${money(-t.amount_cents)}` : money(t.amount_cents))))))),
-  !rows.length && h('div', { style: S.muted }, 'No matching transactions.'))
+// ---------- cash flow ----------
+
+function CashFlowPage ({ o, months, spending }) {
+  const saved = o.income_cents - o.spent_cents
+  const rate = o.income_cents > 0 ? Math.round(100 * saved / o.income_cents) : null
+  const last = Object.fromEntries(spending.last.map(c => [c.category, c.cents]))
+  const max = Math.max(1, ...spending.this.map(c => c.cents))
+  const total = spending.this.reduce((s, c) => s + c.cents, 0)
+  return h('div', { className: 'pb-col' },
+    h(Card, null,
+      h('div', { className: 'pb-stats' },
+        h('div', null, h('div', { className: 'pb-eyebrow' }, `Income in ${monthName(o.month)}`), h('div', { className: 'pb-hero md pb-good' }, money(o.income_cents, true))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Spending'), h('div', { className: 'pb-hero md' }, money(o.spent_cents, true))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Saved so far'), h('div', { className: `pb-hero md ${saved >= 0 ? 'pb-good' : 'pb-bad'}` }, signed(saved))),
+        h('div', null, h('div', { className: 'pb-eyebrow' }, 'Savings rate'), h('div', { className: 'pb-hero md' }, rate == null ? 'n/a' : `${rate}%`)))),
+    h(Card, { title: 'Income and spending', sub: 'Last six months. Hover a month for details.',
+      right: h('div', { className: 'pb-legend' },
+        h('span', null, h('span', { className: 'pb-dot', style: { background: 'var(--gn)' } }), 'Income'),
+        h('span', null, h('span', { className: 'pb-dot', style: { background: 'var(--ac)' } }), 'Spending')) },
+    h(CashFlowChart, { months })),
+    h('div', { className: 'pb-two' },
+      h(Card, { flush: true, title: 'Where it went', sub: `${monthName(o.month)} by category, vs all of last month` },
+        h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, spending.this.map(c => {
+          const prev = last[c.category] || 0
+          return h('div', { key: c.category, className: 'pb-row' },
+            h('div', { className: 'pb-tile sm' }, emoji(c.category)),
+            h('div', { className: 'pb-grow' },
+              h('div', { className: 'pb-flex pb-between', style: { marginBottom: 5 } },
+                h('span', { className: 'pb-strong' }, c.label),
+                h('span', null, h('span', { className: 'pb-strong' }, money(c.cents, true)), h('span', { className: 'pb-muted pb-small' }, `  ${Math.round(100 * c.cents / total)}%`))),
+              h(Bar, { thin: true, pct: 100 * c.cents / max, color: 'var(--ac)' }),
+              h('div', { className: 'pb-muted pb-small', style: { marginTop: 4 } }, prev ? `${money(prev, true)} last month` : 'Nothing last month')))
+        }))),
+      h(Card, { flush: true, title: 'Top merchants', sub: `${monthName(o.month)} so far` },
+        h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, spending.merchants.map(m => h('div', { key: m.merchant, className: 'pb-row' },
+          h(Avatar, { name: m.merchant }),
+          h('div', { className: 'pb-grow' }, h('div', { className: 'pb-strong pb-ellipsis' }, m.merchant), h('div', { className: 'pb-muted pb-small' }, `${m.count} ${m.count === 1 ? 'charge' : 'charges'}`)),
+          h('div', { className: 'pb-amt' }, money(m.cents, true))))))))
 }
 
+// ---------- net worth and investments ----------
 
-// ---------- net worth, investments, goals, rules ----------
+const GROUPS = [['Cash', ['depository']], ['Investments', ['investment', 'brokerage']], ['Credit cards', ['credit']], ['Loans', ['loan']], ['Other', ['other']]]
+const PALETTE = ['var(--ac)', 'var(--gn)', 'var(--pp)', 'var(--yl)', 'var(--bl)', 'var(--rd)', 'var(--m)']
 
-function AreaChart ({ points }) {
-  const W = 640, H = 200, L = 52, R = 12, T = 12, B = 26
-  if (points.length < 2) return h('div', { style: S.muted }, 'History starts with your first sync.')
-  const vals = points.map(p => p.net_cents)
-  let lo = Math.min(...vals), hi = Math.max(...vals)
-  const pad = Math.max(1, (hi - lo) * 0.15); lo -= pad; hi += pad
-  const x = i => L + (W - L - R) * i / (vals.length - 1)
-  const y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo))
-  const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('')
-  const months = []
-  points.forEach((p, i) => { if (p.date.slice(8) <= '07' && !months.some(m => m.m === p.date.slice(0, 7))) months.push({ m: p.date.slice(0, 7), i }) })
-  return h('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', role: 'img', 'aria-label': 'Net worth over time' },
-    [0, 0.5, 1].map((f, i) => h('g', { key: i },
-      h('line', { x1: L, x2: W - R, y1: y(lo + (hi - lo) * f), y2: y(lo + (hi - lo) * f), stroke: V.line }),
-      h('text', { x: L - 6, y: y(lo + (hi - lo) * f) + 4, textAnchor: 'end', fontSize: 10, fill: V.muted }, short(lo + (hi - lo) * f)))),
-    h('path', { d: `${line}L${x(vals.length - 1)},${H - B}L${L},${H - B}Z`, fill: V.accent, opacity: 0.12 }),
-    h('path', { d: line, fill: 'none', stroke: V.accent, strokeWidth: 2, strokeLinejoin: 'round' }),
-    months.map(m => h('text', { key: m.m, x: x(m.i), y: H - 8, textAnchor: 'middle', fontSize: 10, fill: V.muted }, monthAbbr(m.m))))
+function Side ({ title, accounts, total, tone }) {
+  const groups = GROUPS.map(([name, types]) => [name, accounts.filter(a => types.includes(a.type))]).filter(([, a]) => a.length)
+  return h(Card, { flush: true, title, right: h('span', { className: `pb-strong ${tone}`, style: { fontSize: 15 } }, money(total, true)) },
+    groups.length ? groups.map(([name, rows]) => {
+      const sum = rows.reduce((s, a) => s + (a.current_cents || 0), 0)
+      return h('div', { key: name, style: { paddingBottom: 6 } },
+        h('div', { className: 'pb-day' }, h('span', null, name), h('span', null, `${money(sum, true)} · ${total ? Math.round(100 * sum / total) : 0}%`)),
+        h('div', { className: 'pb-list' }, rows.map(a => h('div', { key: a.account_id, className: 'pb-row' },
+          h(Avatar, { name: a.name }),
+          h('div', { className: 'pb-grow' }, h('div', { className: 'pb-strong pb-ellipsis' }, a.name), h('div', { className: 'pb-muted pb-small' }, [a.subtype, a.mask && `••${a.mask}`].filter(Boolean).join(' · '))),
+          h('div', { className: 'pb-amt' }, money(a.current_cents, true))))))
+    }) : h('div', { className: 'pb-muted', style: { padding: '4px 20px 18px' } }, 'None'))
 }
 
-const PALETTE = [V.accent, 'var(--ui-blue, #5fa0fa)', V.green, V.yellow, 'var(--ui-purple, #9670e6)', V.faint, V.red]
-const signed = c => `${c >= 0 ? '+' : '−'}${money(Math.abs(c), true)}`
-
-function NetWorth ({ nw }) {
-  const side = s => nw.accounts.filter(a => a.side === s)
-  const list = (title, rows, total) => h('div', { style: { flex: 1, minWidth: 220 } },
-    h('div', { style: { ...S.row, justifyContent: 'space-between', fontWeight: 600, marginBottom: 4 } }, h('span', null, title), h('span', null, money(total, true))),
-    rows.map(a => h('div', { key: a.account_id, style: { ...S.row, justifyContent: 'space-between', padding: '4px 0', borderTop: `1px solid ${V.line}` } },
-      h('span', null, a.name, h('span', { style: S.muted }, a.mask ? ` ••${a.mask}` : '')),
-      h('span', null, money(a.current_cents, true)))))
-  return h(Card, { title: `Net worth ${money(nw.net_cents, true)}`,
-    right: nw.change_30d_cents != null && h('span', { style: { color: nw.change_30d_cents >= 0 ? V.green : V.red } }, `${signed(nw.change_30d_cents)} in 30 days`) },
-  h(AreaChart, { points: nw.history }),
-  h('div', { style: { display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 12 } },
-    list('Assets', side('asset'), nw.assets_cents), list('Liabilities', side('liability'), nw.liabilities_cents)))
+function NetWorthPage ({ nw, inv, today }) {
+  const [range, setRange] = useState('180')
+  const from = addDays(today, -Number(range))
+  const all = nw.history.filter(p => p.date >= from)
+  const every = Math.ceil(all.length / 70)
+  const pts = all.filter((p, i) => i % every === 0 || i === all.length - 1)
+  const n = pts.length
+  const first = pts[0]
+  const change = first ? nw.net_cents - first.net_cents : null
+  const step = Math.max(1, Math.floor(n / 5))
+  const xTicks = n > 1 ? pts.map((p, i) => [i, p]).filter(([i]) => i % step === 0 && i < n - step / 2).map(([i, p]) => [i, day(p.date)]).concat([[n - 1, 'Today']]) : []
+  const label = { 30: 'past month', 90: 'past 3 months', 180: 'past 6 months', 365: 'past year' }[range]
+  return h('div', { className: 'pb-col' },
+    h(Card, null,
+      h('div', { className: 'pb-flex pb-between pb-wrap', style: { alignItems: 'flex-start' } },
+        h('div', null,
+          h('div', { className: 'pb-eyebrow' }, 'Net worth'),
+          h('div', { className: 'pb-hero' }, money(nw.net_cents, true)),
+          h('div', { className: 'pb-flex', style: { gap: 8 } }, h(Delta, { cents: change, goodWhenUp: true }), h('span', { className: 'pb-muted' }, label),
+            nw.change_ytd_cents != null && h('span', { className: 'pb-muted' }, `· ${signed(nw.change_ytd_cents)} this year`))),
+        h(Seg, { value: range, onChange: setRange, items: [['30', '1M'], ['90', '3M'], ['180', '6M'], ['365', '1Y']] })),
+      h('div', { style: { marginTop: 16 } }, n > 1
+        ? h(LineChart, { n, zero: false, series: [{ values: pts.map(p => p.net_cents), color: 'var(--ac)', area: true, dot: true }], xTicks,
+          tip: i => ({ title: longDay(pts[i].date), rows: [['var(--ac)', 'Net worth', money(pts[i].net_cents, true)], [null, 'Assets', money(pts[i].assets_cents, true)], [null, 'Liabilities', money(pts[i].liabilities_cents, true)]] }) })
+        : h('div', { className: 'pb-muted' }, 'History starts with your first sync.'))),
+    h('div', { className: 'pb-two' },
+      h(Side, { title: 'Assets', accounts: nw.accounts.filter(a => a.side === 'asset'), total: nw.assets_cents, tone: '' }),
+      h(Side, { title: 'Liabilities', accounts: nw.accounts.filter(a => a.side === 'liability'), total: nw.liabilities_cents, tone: '' })),
+    h(InvestmentsCard, { inv }))
 }
 
-function Investments ({ inv }) {
+function InvestmentsCard ({ inv }) {
   if (!inv.holdings.length) {
-    return h(Card, { title: 'Investments' }, h('div', { style: S.muted },
-      inv.accounts_without_holdings.length ? 'Your investment accounts did not share holdings. Balances still count toward net worth.'
-        : 'No investment accounts yet. Connect a brokerage or retirement account to see holdings and allocation.'))
+    return h(Card, { title: 'Investments' }, h('div', { className: 'pb-muted' },
+      inv.accounts_without_holdings.length ? 'Your investment accounts did not share holdings. Their balances still count toward net worth.'
+        : 'Connect a brokerage or retirement account to see holdings and allocation.'))
   }
-  return h(Card, { title: `Investments ${money(inv.total_cents, true)}`,
-    right: inv.gain_cents != null && h('span', { style: { color: inv.gain_cents >= 0 ? V.green : V.red } }, `${signed(inv.gain_cents)} (${inv.gain_pct}%) vs cost`) },
-  h('div', { style: { display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', margin: '4px 0 10px' } },
-    inv.allocation.map((a, i) => h('div', { key: a.type, title: `${a.type} ${a.pct}%`, style: { width: `${a.pct}%`, background: PALETTE[i % PALETTE.length] } }))),
-  h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginBottom: 12 } },
-    inv.allocation.map((a, i) => h('span', { key: a.type, style: S.row },
-      h('span', { style: { width: 9, height: 9, borderRadius: 2, background: PALETTE[i % PALETTE.length] } }),
-      `${a.type} `, h('span', { style: S.muted }, `${a.pct}%`)))),
-  h('div', { style: { overflowX: 'auto' } }, h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
-    h('tbody', null, inv.holdings.map((x, i) => h('tr', { key: i, style: { borderTop: `1px solid ${V.line}` } },
-      h('td', { style: { padding: '6px 8px 6px 0', fontWeight: 600 } }, x.ticker || '—'),
-      h('td', { style: { padding: '6px 8px', ...S.muted } }, x.name),
-      h('td', { style: { padding: '6px 8px', ...S.muted, whiteSpace: 'nowrap' } }, x.account),
-      h('td', { style: { padding: '6px 8px', textAlign: 'right' } }, money(x.value_cents, true)),
-      h('td', { style: { padding: '6px 0 6px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: x.gain_cents == null ? V.muted : x.gain_cents >= 0 ? V.green : V.red } },
-        x.gain_cents == null ? '—' : signed(x.gain_cents))))))))
+  return h(Card, null,
+    h('div', { className: 'pb-flex pb-between pb-wrap', style: { alignItems: 'flex-start' } },
+      h('div', null,
+        h('div', { className: 'pb-eyebrow' }, 'Investments'),
+        h('div', { className: 'pb-hero md' }, money(inv.total_cents, true)),
+        inv.gain_cents != null && h('div', { className: 'pb-flex', style: { gap: 8 } },
+          h(Chip, { tone: inv.gain_cents >= 0 ? 'good' : 'bad' }, `${inv.gain_cents >= 0 ? '↑' : '↓'} ${money(Math.abs(inv.gain_cents), true)} (${inv.gain_pct}%)`),
+          h('span', { className: 'pb-muted' }, `vs ${money(inv.cost_basis_cents, true)} cost basis`))),
+      h('div', { style: { minWidth: 260, flex: '0 1 420px' } },
+        h('div', { style: { display: 'flex', height: 10, borderRadius: 99, overflow: 'hidden', gap: 2, marginTop: 6 } },
+          inv.allocation.map((a, i) => h('div', { key: a.type, title: `${a.type} ${a.pct}%`, style: { width: `${a.pct}%`, background: PALETTE[i % PALETTE.length] } }))),
+        h('div', { className: 'pb-legend', style: { marginTop: 10, gap: '6px 16px' } }, inv.allocation.map((a, i) => h('span', { key: a.type },
+          h('span', { className: 'pb-dot', style: { background: PALETTE[i % PALETTE.length] } }), a.type, h('b', { style: { color: 'var(--ui-text-primary, inherit)', fontWeight: 600 } }, `${a.pct}%`)))))),
+    h('div', { style: { overflowX: 'auto', marginTop: 18 } }, h('table', { className: 'pb-table' },
+      h('thead', null, h('tr', null, h('th', null, 'Holding'), h('th', null, 'Account'), h('th', { className: 'r' }, 'Shares'), h('th', { className: 'r' }, 'Value'), h('th', { className: 'r' }, 'Weight'), h('th', { className: 'r' }, 'Gain'))),
+      h('tbody', null, inv.holdings.map((x, i) => h('tr', { key: i },
+        h('td', null, h('div', { className: 'pb-flex' }, h('span', { className: 'pb-ticker' }, x.ticker || 'n/a'), h('span', { className: 'pb-ellipsis', style: { maxWidth: 260 } }, x.name))),
+        h('td', { className: 'pb-muted' }, x.account),
+        h('td', { className: 'r pb-muted' }, x.quantity != null ? Number(x.quantity).toLocaleString('en-US', { maximumFractionDigits: 3 }) : ''),
+        h('td', { className: 'r pb-strong' }, money(x.value_cents, true)),
+        h('td', { className: 'r pb-muted' }, `${x.pct_of_portfolio}%`),
+        h('td', { className: `r ${x.gain_cents == null ? 'pb-muted' : x.gain_cents >= 0 ? 'pb-good' : 'pb-bad'}` }, x.gain_cents == null ? '' : signed(x.gain_cents))))))))
+}
+
+// ---------- goals ----------
+
+const GOAL_STATUS = { on_track: ['On track', 'good', 'var(--gn)'], behind: ['Behind', 'warn', 'var(--yl)'], overdue: ['Past due', 'bad', 'var(--rd)'],
+  done: ['Reached', 'good', 'var(--gn)'], no_date: ['No date', 'neutral', 'var(--ac)'] }
+const goalEmoji = name => {
+  const s = name.toLowerCase()
+  return /emergency|rainy|safety/.test(s) ? '🛟' : /trip|travel|vacation|japan|europe/.test(s) ? '✈️' : /house|home|down ?payment/.test(s) ? '🏡'
+    : /car|tesla/.test(s) ? '🚗' : /wedding|ring/.test(s) ? '💍' : /school|college|tuition/.test(s) ? '🎓' : /retire/.test(s) ? '🏖️' : '🎯'
 }
 
 function SavedEditor ({ g, post }) {
   const [v, setV] = useState(null)
-  if (v === null) return h(Button, { onClick: () => setV(String(g.current_cents / 100)) }, 'Update saved')
+  if (v === null) return h(Btn, { small: true, onClick: () => setV(String(g.current_cents / 100)) }, 'Update amount')
   const save = () => { if (v !== '' && !isNaN(Number(v))) post('/goals', { action: 'update', id: g.id, saved: Number(v) }); setV(null) }
-  return h('span', { style: S.row },
-    h('input', { style: { ...S.input, width: 90, textAlign: 'right' }, autoFocus: true, inputMode: 'decimal', value: v,
+  return h('span', { className: 'pb-flex', style: { gap: 6 } },
+    h('input', { className: 'pb-input', style: { width: 100, textAlign: 'right', padding: '3px 8px' }, autoFocus: true, inputMode: 'decimal', value: v,
       onChange: e => setV(e.target.value), onKeyDown: e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setV(null) } }),
-    h(Button, { primary: true, onClick: save }, 'Save'))
+    h(Btn, { small: true, primary: true, onClick: save }, 'Save'))
 }
 
-const GOAL_STATUS = { on_track: ['On track', null], behind: ['Behind', 'yellow'], overdue: ['Past due', 'red'], done: ['Reached', 'green'], no_date: ['No date', null] }
+function GoalCard ({ g, post }) {
+  const [word, tone, color] = GOAL_STATUS[g.status] || [g.status, 'neutral', 'var(--ac)']
+  return h('section', { className: 'pb-card', style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+    h('div', { className: 'pb-flex pb-between', style: { alignItems: 'flex-start' } },
+      h('div', { className: 'pb-flex' },
+        h('div', { className: 'pb-tile', style: { width: 40, height: 40, fontSize: 20, borderRadius: 11 } }, goalEmoji(g.name)),
+        h('div', null, h('div', { className: 'pb-strong', style: { fontSize: 15 } }, g.name),
+          h('div', { className: 'pb-muted pb-small' }, g.account ? `Follows ${g.account}` : 'Updated by you'))),
+      h(Chip, { tone }, word)),
+    h('div', { className: 'pb-flex', style: { gap: 16 } },
+      h(Ring, { pct: g.pct, color }),
+      h('div', null,
+        h('div', { className: 'pb-hero md', style: { margin: 0 } }, money(g.current_cents, true)),
+        h('div', { className: 'pb-muted' }, `of ${money(g.target_cents, true)}`))),
+    h('div', { className: 'pb-small', style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+      g.target_date && h('div', { className: 'pb-flex pb-between' }, h('span', { className: 'pb-muted' }, 'Target date'), h('span', null, at(g.target_date).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))),
+      g.needed_per_month_cents && g.status !== 'done' ? h('div', { className: 'pb-flex pb-between' }, h('span', { className: 'pb-muted' }, 'Needed per month'), h('span', { className: 'pb-strong' }, money(g.needed_per_month_cents, true))) : null,
+      g.expected_cents != null && g.status !== 'done' ? h('div', { className: 'pb-flex pb-between' }, h('span', { className: 'pb-muted' }, 'Pace says by now'), h('span', null, money(g.expected_cents, true))) : null),
+    h('div', { className: 'pb-flex pb-between', style: { marginTop: 'auto' } },
+      g.tracking === 'manual' ? h(SavedEditor, { g, post }) : h('span'),
+      h(Btn, { small: true, ghost: true, onClick: () => post('/goals', { action: 'remove', id: g.id }) }, 'Remove')))
+}
 
-function Goals ({ goals, accounts, post, busy }) {
+function GoalsPage ({ goals, accounts, post, busy }) {
   const blank = { name: '', target: '', target_date: '', account_id: '', saved: '' }
   const [form, setForm] = useState(blank)
   const [open, setOpen] = useState(false)
@@ -326,73 +699,94 @@ function Goals ({ goals, accounts, post, busy }) {
       account_id: form.account_id || null, saved: form.account_id ? null : Number(form.saved || 0) })
     setForm(blank); setOpen(false)
   }
-  return h(Card, { title: 'Savings goals', right: h(Button, { onClick: () => setOpen(!open) }, open ? 'Cancel' : 'New goal') },
-    open && h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 } },
-      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Name, e.g. Emergency fund', value: form.name, onChange: set('name') }),
-      h('input', { style: { ...S.input, flex: '1 1 100px' }, placeholder: 'Target $', inputMode: 'decimal', value: form.target, onChange: set('target') }),
-      h('input', { style: { ...S.input, flex: '1 1 130px' }, type: 'date', value: form.target_date, onChange: set('target_date') }),
-      h('select', { style: { ...S.input, flex: '2 1 180px' }, value: form.account_id, onChange: set('account_id') },
-        h('option', { value: '' }, 'Track manually'),
-        accounts.filter(a => a.type === 'depository' || a.type === 'investment').map(a => h('option', { key: a.account_id, value: a.account_id }, `Follow ${a.name} balance`))),
-      !form.account_id && h('input', { style: { ...S.input, flex: '1 1 100px' }, placeholder: 'Saved so far $', inputMode: 'decimal', value: form.saved, onChange: set('saved') }),
-      h(Button, { primary: true, disabled: busy || !form.name || !(Number(form.target) > 0), onClick: add }, 'Add goal')),
-    !goals.length && !open && h('div', { style: S.muted }, 'No goals yet. A goal can follow a savings account balance or a number you update.'),
-    goals.map(g => {
-      const [word, tone] = GOAL_STATUS[g.status] || [g.status, null]
-      const color = tone ? V[tone] : V.accent
-      return h('div', { key: g.id, style: { padding: '10px 0', borderTop: `1px solid ${V.line}` } },
-        h('div', { style: { ...S.row, justifyContent: 'space-between', marginBottom: 6 } },
-          h('span', { style: { fontWeight: 600 } }, g.name, h('span', { style: { ...S.muted, fontWeight: 400 } }, g.account ? ` · follows ${g.account}` : ' · manual')),
-          h('span', { style: S.row },
-            h('span', { style: { color: tone ? color : V.muted } }, word),
-            g.tracking === 'manual' && h(SavedEditor, { g, post }),
-            h(Button, { onClick: () => post('/goals', { action: 'remove', id: g.id }), title: 'Remove goal' }, '✕'))),
-        h('div', { style: { height: 8, borderRadius: 4, background: V.track, position: 'relative' } },
-          h('div', { style: { position: 'absolute', inset: 0, width: `${g.pct}%`, borderRadius: 4, background: color } }),
-          g.expected_cents != null && g.status !== 'done' && h('div', { title: 'Where the pace says you should be', style: { position: 'absolute', top: -3, bottom: -3, width: 2,
-            left: `calc(${Math.min(100, 100 * g.expected_cents / g.target_cents)}% - 1px)`, background: 'currentColor', opacity: 0.5 } })),
-        h('div', { style: { ...S.muted, fontSize: 12, marginTop: 5 } },
-          `${money(g.current_cents, true)} of ${money(g.target_cents, true)} (${g.pct}%)`,
-          g.target_date ? ` · by ${day(g.target_date)}, ${g.target_date.slice(0, 4)}` : '',
-          g.needed_per_month_cents && g.status !== 'done' ? ` · ${money(g.needed_per_month_cents, true)}/month to finish` : ''))
-    }))
+  return h('div', { className: 'pb-col' },
+    open && h(Card, { title: 'New goal', sub: 'A goal can follow a savings account balance or an amount you update.' },
+      h('div', { className: 'pb-form' },
+        h('input', { className: 'pb-input', placeholder: 'Name, e.g. Emergency fund', value: form.name, onChange: set('name'), autoFocus: true }),
+        h('input', { className: 'pb-input', placeholder: 'Target amount ($)', inputMode: 'decimal', value: form.target, onChange: set('target') }),
+        h('input', { className: 'pb-input', type: 'date', value: form.target_date, onChange: set('target_date') }),
+        h('select', { className: 'pb-input', value: form.account_id, onChange: set('account_id') },
+          h('option', { value: '' }, 'I will update it myself'),
+          accounts.filter(a => a.type === 'depository' || a.type === 'investment').map(a => h('option', { key: a.account_id, value: a.account_id }, `Follow ${a.name}`))),
+        !form.account_id && h('input', { className: 'pb-input', placeholder: 'Saved so far ($)', inputMode: 'decimal', value: form.saved, onChange: set('saved') })),
+      h('div', { className: 'pb-flex', style: { justifyContent: 'flex-end', marginTop: 14 } },
+        h(Btn, { ghost: true, onClick: () => setOpen(false) }, 'Cancel'),
+        h(Btn, { primary: true, disabled: busy || !form.name || !(Number(form.target) > 0), onClick: add }, 'Create goal'))),
+    h('div', { className: 'pb-cards' },
+      goals.map(g => h(GoalCard, { key: g.id, g, post })),
+      !open && h('button', { className: 'pb-new', onClick: () => setOpen(true) }, '+ New goal')))
+}
+
+// ---------- transactions ----------
+
+function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy }) {
+  const [q, setQ] = useState('')
+  const [cat, setCat] = useState('')
+  const [rows, setRows] = useState(data.recent)
+  useEffect(() => {
+    if (filter) { api(`/transactions?ids=${encodeURIComponent(filter.ids.join(','))}`).then(r => setRows(r.transactions)).catch(() => {}); return }
+    const t = setTimeout(() => api(`/transactions?limit=150&query=${encodeURIComponent(q)}&category=${encodeURIComponent(cat)}`).then(r => setRows(r.transactions)).catch(() => {}), q ? 250 : 0)
+    return () => clearTimeout(t)
+  }, [q, cat, filter, data])
+  return h('div', { className: 'pb-split' },
+    h(Card, { flush: true, title: filter ? filter.title : 'Transactions', sub: filter ? 'Charges behind this alert' : null,
+      right: filter ? h(Btn, { small: true, onClick: clearFilter }, 'Show all') : h('div', { className: 'pb-flex', style: { gap: 8 } },
+        h('input', { className: 'pb-input', style: { width: 200 }, placeholder: 'Search merchants', value: q, onChange: e => setQ(e.target.value) }),
+        h('select', { className: 'pb-input', value: cat, onChange: e => setCat(e.target.value) },
+          h('option', { value: '' }, 'All categories'),
+          Object.entries(data.categories).map(([k, l]) => h('option', { key: k, value: k }, `${emoji(k)} ${l}`)))) },
+    h(TxnList, { rows, today: data.overview.today, grouped: true, categories: data.categories, api, onChanged: load })),
+    h('div', { className: 'pb-col' },
+      h(Rules, { rules: data.rules, categories: data.categories, post, busy }),
+      h(Card, { flush: true, title: 'Accounts' },
+        h('div', { className: 'pb-list', style: { paddingBottom: 6 } }, data.accounts.map(a => h('div', { key: a.account_id, className: 'pb-row' },
+          h(Avatar, { name: a.name }),
+          h('div', { className: 'pb-grow' }, h('div', { className: 'pb-strong pb-ellipsis' }, a.name),
+            h('div', { className: `pb-small pb-ellipsis ${a.item_status && a.item_status !== 'ok' ? 'pb-bad' : 'pb-muted'}` },
+              a.item_status && a.item_status !== 'ok' ? 'Needs reconnect' : [a.institution, a.mask && `••${a.mask}`].filter(Boolean).join(' · '))),
+          h('div', { className: 'pb-amt' }, money(a.current_cents, true))))))))
 }
 
 function Rules ({ rules, categories, post, busy }) {
   const [match, setMatch] = useState('')
   const [cat, setCat] = useState('')
   const add = async () => { await post('/rules', { action: 'add', match, category: cat }); setMatch(''); setCat('') }
-  return h(Card, { title: 'Categorization rules' },
-    h('div', { style: { ...S.muted, marginBottom: 10 } }, 'Charges whose merchant contains the text get the category, now and on every sync. Type a new name to make your own category.'),
-    h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 } },
-      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Merchant contains…', value: match, onChange: e => setMatch(e.target.value) }),
-      h('input', { style: { ...S.input, flex: '2 1 160px' }, placeholder: 'Category', list: 'pb-categories', value: cat, onChange: e => setCat(e.target.value) }),
-      h('datalist', { id: 'pb-categories' }, Object.values(categories).map(l => h('option', { key: l, value: l }))),
-      h(Button, { primary: true, disabled: busy || !match.trim() || !cat.trim(), onClick: add }, 'Add rule')),
-    rules.map(r => h('div', { key: r.id, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
-      h('span', { style: { flex: 1 } }, h('span', { style: S.muted }, 'contains '), `“${r.pattern}”`, h('span', { style: S.muted }, ' → '), h('span', { style: { fontWeight: 500 } }, r.category_label)),
-      h('span', { style: S.muted }, `${r.matches} charges`),
-      h(Button, { onClick: () => post('/rules', { action: 'remove', id: r.id }), title: 'Remove rule' }, '✕'))))
+  return h(Card, { title: 'Rules', sub: 'Charges whose merchant contains the text get the category, now and on every sync.' },
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      h('input', { className: 'pb-input', placeholder: 'Merchant contains', value: match, onChange: e => setMatch(e.target.value) }),
+      h('div', { className: 'pb-flex', style: { gap: 8 } },
+        h('input', { className: 'pb-input pb-grow', placeholder: 'Category (or a new one)', list: 'pb-categories', value: cat, onChange: e => setCat(e.target.value) }),
+        h(Btn, { primary: true, disabled: busy || !match.trim() || !cat.trim(), onClick: add }, 'Add')),
+      h('datalist', { id: 'pb-categories' }, Object.values(categories).map(l => h('option', { key: l, value: l })))),
+    rules.length > 0 && h('div', { className: 'pb-list', style: { marginTop: 10 } }, rules.map(r => h('div', { key: r.id, className: 'pb-row', style: { padding: '8px 0' } },
+      h('div', { className: 'pb-grow' },
+        h('div', null, `“${r.pattern}”`, h('span', { className: 'pb-muted' }, '  →  '), h('span', { className: 'pb-strong' }, `${emoji(r.category)} ${r.category_label}`)),
+        h('div', { className: 'pb-muted pb-small' }, `${r.matches} ${r.matches === 1 ? 'charge' : 'charges'}`)),
+      h(Btn, { small: true, ghost: true, title: 'Remove rule', onClick: () => post('/rules', { action: 'remove', id: r.id }) }, '✕')))))
 }
 
-function CategoryCell ({ t, categories, api, onChanged }) {
-  const [editing, setEditing] = useState(false)
-  if (!editing) return h('span', { style: { cursor: 'pointer', borderBottom: `1px dashed ${V.line}` }, title: 'Change category', onClick: () => setEditing(true) }, t.category_label)
-  return h('select', { style: { ...S.input, padding: '2px 4px' }, autoFocus: true, defaultValue: t.category, onBlur: () => setEditing(false),
-    onChange: async e => {
-      const all = window.confirm(`Apply to every charge from ${t.merchant}? Cancel changes just this one.`)
-      await api('/transactions/category', { method: 'POST', body: { id: t.id, category: e.target.value, all_from_merchant: all } })
-      setEditing(false); onChanged()
-    } },
-  Object.entries(categories).map(([k, l]) => h('option', { key: k, value: k }, l)))
+// ---------- setup ----------
+
+function Setup ({ setup, act, busy }) {
+  const ready = setup.plaid_configured
+  return h(Card, { title: 'Connect your accounts', sub: 'Pocketbook reads balances and transactions through Plaid with your own keys.' },
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '4px 0 18px' } },
+      h('div', { className: 'pb-step' }, h('b', null, '1'), h('div', null, 'Create free Plaid keys at dashboard.plaid.com, under Developers, Keys.')),
+      h('div', { className: 'pb-step' }, h('b', null, '2'), h('div', null, 'Paste them in Settings, Plugins, pocketbook. ',
+        h(Chip, { tone: ready ? 'good' : 'neutral' }, ready ? `Keys found (${setup.plaid_env})` : 'No keys yet'))),
+      h('div', { className: 'pb-step' }, h('b', null, '3'), h('div', null, 'Connect a bank. Pocketbook syncs two years of history and Hermes proposes budgets from it.'))),
+    h('div', { className: 'pb-flex pb-wrap' },
+      h(Btn, { primary: true, disabled: !ready || busy, onClick: () => act('connect') }, 'Connect a bank'),
+      setup.plaid_env === 'sandbox' && h(Btn, { disabled: !ready || busy, onClick: () => act('test-bank') }, 'Add Plaid test bank'),
+      h(Btn, { ghost: true, disabled: busy, onClick: () => act('demo') }, 'Try sample data')),
+    setup.linking && h('div', { className: 'pb-notice', style: { marginTop: 14 } },
+      h('span', null, 'Finished signing in to your bank?'),
+      h(Btn, { primary: true, small: true, disabled: busy, onClick: () => act('finish') }, 'Finish connecting')))
 }
 
-function Tabs ({ value, onChange, items }) {
-  return h('div', { role: 'tablist', style: { display: 'flex', gap: 4, borderBottom: `1px solid ${V.line}` } },
-    items.map(([k, l]) => h('button', { key: k, role: 'tab', 'aria-selected': value === k, onClick: () => onChange(k),
-      style: { border: 'none', background: 'transparent', color: value === k ? 'inherit' : V.muted, font: 'inherit', fontWeight: value === k ? 600 : 400,
-        padding: '8px 12px', cursor: 'pointer', borderBottom: `2px solid ${value === k ? V.accent : 'transparent'}`, marginBottom: -1 } }, l)))
-}
+// ---------- app ----------
+
+const TABS = [['overview', 'Overview'], ['budget', 'Budget'], ['cashflow', 'Cash flow'], ['wealth', 'Net worth'], ['goals', 'Goals'], ['activity', 'Transactions']]
 
 function FinanceApp () {
   const [data, setData] = useState(null)
@@ -417,17 +811,17 @@ function FinanceApp () {
       if (what === 'connect') {
         const r = await post('/connect')
         if (r.url) openUrl(r.url)
-        setNotice('Plaid opened in your browser. Sign in to your bank, then press Finish connecting.')
+        setNotice(['Plaid opened in your browser. Sign in to your bank, then press Finish connecting.'])
       } else if (what === 'finish') {
-        const r = await post('/connect/finish'); setNotice(`Connected ${r.added.map(a => a.institution).join(', ')}.`)
+        const r = await post('/connect/finish'); setNotice([`Connected ${r.added.map(a => a.institution).join(', ')}.`])
       } else if (what === 'test-bank') {
-        await post('/test-bank'); setNotice('Plaid test bank connected and synced.')
+        await post('/test-bank'); setNotice(['Plaid test bank connected and synced.'])
       } else if (what === 'demo') {
-        await post('/demo', { action: 'load' }); setNotice('Sample data loaded. Budgets below are proposals waiting for approval.')
+        await post('/demo', { action: 'load' }); setNotice(['Sample data loaded. Hermes proposed budgets for you to review under Budget.'])
       } else if (what === 'clear-demo') {
         await post('/demo', { action: 'clear' })
       } else if (what === 'sync') {
-        const r = await post('/sync'); setNotice(r.skipped ? `Sync skipped: ${r.skipped}.` : `Synced: ${r.added} new, ${r.modified} updated.`)
+        const r = await post('/sync'); setNotice([r.skipped ? `Sync skipped: ${r.skipped}.` : `Synced: ${r.added} new, ${r.modified} updated.`])
       } else if (what === 'propose') {
         await post('/budgets/propose')
       } else if (what === 'approve') {
@@ -439,78 +833,56 @@ function FinanceApp () {
       }
       if (!quiet) await load()
     } catch (e) {
-      setNotice(`Error: ${e && e.message || e}`)
+      setNotice([`Error: ${e && e.message || e}`, true])
     } finally {
       setBusy(false)
     }
   }, [load])
 
-  if (error && !data) return h('div', { style: S.page }, h(Card, { title: 'Finance' }, h('div', { style: S.muted }, `Could not load: ${error}. Is the pocketbook plugin enabled and the gateway running?`)))
-  if (!data) return h('div', { style: { ...S.page, ...S.muted } }, 'Loading…')
+  const style = h('style', null, CSS)
+  if (error && !data) return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page' }, h(Card, { title: 'Finance' }, h('div', { className: 'pb-muted' }, `Could not load: ${error}. Is the pocketbook plugin enabled?`))))
+  if (!data) return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page pb-muted' }, 'Loading…'))
 
   const o = data.overview
   const empty = !o.accounts
-  const delta = o.spent_cents - o.spent_same_point_last_month_cents
-  const b = data.budgets
-  const left = b.total_budget_cents - b.total_spent_cents
   const showTxns = (ids, title) => { setFilter({ ids, title }); setTab('activity') }
   const post = async (path, body) => {
     setBusy(true)
-    try { await api(path, { method: 'POST', body }); await load() } catch (e) { setNotice(`Error: ${e && e.message || e}`) } finally { setBusy(false) }
+    try { await api(path, { method: 'POST', body }); await load() } catch (e) { setNotice([`Error: ${e && e.message || e}`, true]) } finally { setBusy(false) }
   }
+  const go = k => () => { setFilter(null); setTab(k) }
+  const tabs = TABS.map(([k, l]) => [k, k === 'goals' && data.goals.length ? `${l} ${data.goals.length}` : k === 'budget' && data.budgets.proposed.length ? `${l} •` : l])
 
-  return h('div', { style: S.page },
-    h('header', { style: { ...S.row, justifyContent: 'space-between', flexWrap: 'wrap' } },
+  return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page' },
+    h('header', { className: 'pb-head' },
       h('div', null,
-        h('div', { style: { fontSize: 20, fontWeight: 600 } }, `${monthName(o.month)} finances`),
-        h('div', { style: S.muted }, empty ? 'No accounts connected' : `${o.accounts} accounts · synced ${ago(o.last_sync)}`,
-          o.demo && h('span', { style: { marginLeft: 8, padding: '1px 7px', borderRadius: 9, border: `1px solid ${V.line}` } }, 'Sample data'))),
-      !empty && h('div', { style: S.row },
-        o.demo && h(Button, { disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
-        h(Button, { disabled: busy, onClick: () => act('sync') }, busy ? 'Working…' : 'Sync now'))),
-    notice && h('div', { style: { ...S.card, padding: '10px 14px' } }, notice),
+        h('h1', { className: 'pb-title' }, 'Finance'),
+        h('div', { className: 'pb-sub' }, empty ? 'No accounts connected' : `${o.accounts} accounts · synced ${ago(o.last_sync)}`,
+          o.demo && h(Chip, { tone: 'accent' }, 'Sample data'))),
+      !empty && h('div', { className: 'pb-flex' },
+        o.demo && h(Btn, { ghost: true, disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
+        h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Working…' : 'Sync now'))),
+    notice && h('div', { className: `pb-notice${notice[1] ? ' err' : ''}` }, h('span', null, notice[0]), h(Btn, { small: true, ghost: true, onClick: () => setNotice(null) }, '✕')),
     (empty || !data.setup.live_items) && !o.demo && h(Setup, { setup: data.setup, act, busy }),
-    empty ? null : h(React.Fragment, null,
-      h('div', { style: S.grid(180) },
-        h(Stat, { label: 'Spent this month', value: money(o.spent_cents, true),
-          sub: `${delta >= 0 ? '+' : '−'}${money(Math.abs(delta), true)} vs same point last month` }),
-        h(Stat, { label: 'Budget left', value: b.total_budget_cents ? money(left, true) : '—',
-          sub: b.total_budget_cents ? `of ${money(b.total_budget_cents, true)} · ${b.days_in_month - b.days_elapsed} days to go` : 'No budgets yet',
-          tone: b.total_budget_cents && left < 0 ? V.red : null }),
-        h(Stat, { label: 'Net worth', value: money(o.net_worth_cents, true),
-          sub: o.net_worth_change_30d_cents != null ? `${signed(o.net_worth_change_30d_cents)} in 30 days` : `Cash ${money(o.cash_cents, true)}` }),
-        h(Stat, { label: 'Investments', value: money(o.investments_cents, true),
-          sub: data.investments.gain_cents != null ? `${signed(data.investments.gain_cents)} vs cost` : 'Brokerage and retirement' })),
-      h(Tabs, { value: tab, onChange: setTab, items: [['overview', 'Overview'], ['wealth', 'Net worth'], ['goals', `Goals${data.goals.length ? ` (${data.goals.length})` : ''}`], ['activity', 'Transactions']] }),
-      tab === 'overview' && h(React.Fragment, null,
-        h(Alerts, { alerts: data.alerts, act, showTxns }),
-        h('div', { style: S.grid(420) },
-          h(Budgets, { budgets: b, act, busy }),
-          h(Card, { title: 'This month vs last' },
-            h(PaceChart, { pace: data.pace, budget: b.total_budget_cents }),
-            h('div', { style: { ...S.row, ...S.muted, fontSize: 12, marginTop: 6 } },
-              h('span', { style: { color: V.accent } }, '━'), ' This month', h('span', { style: { color: V.faint, marginLeft: 10 } }, '━'), ' Last month'))),
-        h('div', { style: S.grid(420) },
-          h(Card, { title: 'Last six months' }, h(MonthsChart, { months: data.months }),
-            h('div', { style: { ...S.muted, fontSize: 12, marginTop: 6 } }, 'Bars show spending; green dots show income.')),
-          h(Card, { title: 'Bills and subscriptions' },
-            data.recurring.length ? data.recurring.map(r => h('div', { key: r.merchant, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
-              h('span', { style: { flex: 1, fontWeight: 500 } }, r.merchant),
-              h('span', { style: S.muted }, `${r.cadence} · next ${day(r.next_date)}`),
-              h('span', { style: { minWidth: 70, textAlign: 'right', color: r.last_cents > r.previous_cents ? V.yellow : 'inherit' } }, money(r.last_cents))))
-              : h('div', { style: S.muted }, 'None detected yet. Pocketbook needs three charges to spot a pattern.')))),
-      tab === 'wealth' && h(React.Fragment, null,
-        h(NetWorth, { nw: data.networth }),
-        h(Investments, { inv: data.investments })),
-      tab === 'goals' && h(Goals, { goals: data.goals, accounts: data.accounts, post, busy }),
-      tab === 'activity' && h(React.Fragment, null,
-        h(Transactions, { initial: data.recent, api, filter, clearFilter: () => setFilter(null), categories: data.categories, onChanged: load }),
-        h(Rules, { rules: data.rules, categories: data.categories, post, busy }),
-        h(Card, { title: 'Accounts' },
-          data.accounts.map(a => h('div', { key: a.account_id, style: { ...S.row, padding: '6px 0', borderTop: `1px solid ${V.line}` } },
-            h('span', { style: { flex: 1 } }, h('span', { style: { fontWeight: 500 } }, a.name), h('span', { style: S.muted }, a.mask ? ` ••${a.mask}` : '')),
-            h('span', { style: S.muted }, `${a.institution || ''}${a.item_status && a.item_status !== 'ok' ? ' · needs reconnect' : ''}`),
-            h('span', { style: { minWidth: 90, textAlign: 'right' } }, money(a.current_cents))))))))
+    !empty && h('nav', { className: 'pb-nav', role: 'tablist' },
+      tabs.map(([k, l]) => h('button', { key: k, role: 'tab', 'aria-selected': tab === k, onClick: go(k) }, l))),
+    empty ? null
+      : tab === 'overview' ? h('div', { className: 'pb-split' },
+        h('div', { className: 'pb-col' },
+          h(SpendingCard, { o, pace: data.pace, budget: data.budgets.total_budget_cents }),
+          h(AlertsCard, { alerts: data.alerts, act, showTxns }),
+          h(Card, { flush: true, title: 'Recent transactions', action: ['All transactions', go('activity')] },
+            h(TxnList, { rows: data.recent.slice(0, 8), today: o.today, categories: data.categories, api, onChanged: load }))),
+        h('div', { className: 'pb-col' },
+          h(BudgetMini, { b: data.budgets, go: go('budget'), act, busy }),
+          h(NetWorthMini, { nw: data.networth, go: go('wealth') }),
+          h(Upcoming, { bills: o.upcoming_bills, today: o.today }),
+          h(GoalsMini, { goals: data.goals, go: go('goals') })))
+        : tab === 'budget' ? h(BudgetPage, { b: data.budgets, act, busy })
+          : tab === 'cashflow' ? h(CashFlowPage, { o, months: data.months, spending: data.spending })
+            : tab === 'wealth' ? h(NetWorthPage, { nw: data.networth, inv: data.investments, today: o.today })
+              : tab === 'goals' ? h(GoalsPage, { goals: data.goals, accounts: data.accounts, post, busy })
+                : h(TransactionsPage, { data, api, filter, clearFilter: () => setFilter(null), load, post, busy })))
 }
 
 export default {
