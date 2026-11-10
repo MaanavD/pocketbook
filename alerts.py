@@ -63,7 +63,7 @@ def detect(conn, today: date, settings: dict) -> list[dict]:
     large = int(float(s["large_purchase_dollars"]) * 100)
     out: list[dict] = []
     recent = _recent_spend(conn, since)
-    oldest = conn.execute("SELECT MIN(date) FROM transactions").fetchone()[0]
+    oldest = conn.execute(f"SELECT MIN(t.date) {FROM_SQL}").fetchone()[0]
     history_days = (today - date.fromisoformat(oldest)).days if oldest else 0
     flagged: set[str] = set()
 
@@ -76,7 +76,7 @@ def detect(conn, today: date, settings: dict) -> list[dict]:
             flagged.add(t["id"])
             continue
         prior = conn.execute(
-            f"SELECT t.amount_cents FROM transactions t WHERE COALESCE(t.merchant, t.name) = ? AND t.id != ?"
+            f"SELECT t.amount_cents {FROM_SQL} WHERE COALESCE(t.merchant, t.name) = ? AND t.id != ?"
             f" AND t.date < ? AND t.amount_cents > 0 AND t.pending = 0 AND t.date >= ?",
             (m, t["id"], t["date"], (today - timedelta(days=365)).isoformat()),
         ).fetchall()
@@ -90,7 +90,7 @@ def detect(conn, today: date, settings: dict) -> list[dict]:
                 flagged.add(t["id"])
         elif not prior and history_days >= 60 and amt >= 15000:
             seen = conn.execute(
-                "SELECT 1 FROM transactions WHERE COALESCE(merchant, name) = ? AND id != ? AND date < ? LIMIT 1",
+                f"SELECT 1 {FROM_SQL} WHERE COALESCE(t.merchant, t.name) = ? AND t.id != ? AND t.date < ? LIMIT 1",
                 (m, t["id"], t["date"]),
             ).fetchone()
             if not seen:
@@ -150,7 +150,7 @@ def detect(conn, today: date, settings: dict) -> list[dict]:
                               f"called for {fmt(g['expected_cents'])} by now. About {fmt(g['needed_per_month_cents'])}"
                               f" a month gets it back on track."))
 
-    for item in conn.execute("SELECT * FROM items WHERE status != 'ok'").fetchall():
+    for item in conn.execute("SELECT * FROM active_items WHERE status != 'ok'").fetchall():
         out.append(_alert("connection", f"{item['item_id']}:{item['error']}", "warn",
                           f"{item['institution'] or 'A bank'} needs attention",
                           f"Sync stopped: {item['error']}. Reconnect it from the Finance tab or ask me to relink it."))
@@ -188,11 +188,34 @@ def in_quiet_hours(spec: str, now: datetime) -> bool:
     return start <= t < end if start < end else t >= start or t < end
 
 
+def _relevant(conn, rows, settings=None, on_date=None):
+    if not rows:
+        return []
+    # Computed alerts without transaction ids only apply while their condition still holds.
+    from .store import today
+    computed = {"budget", "goal", "connection", "bill"}
+    current = {a["key"] for a in detect(conn, on_date or today(), settings or DEFAULTS)} if any(row["kind"] in computed for row in rows) else set()
+    visible = []
+    for row in rows:
+        setting = KIND_SETTING.get(row["kind"])
+        if settings is not None and setting and settings.get(setting) is False:
+            continue
+        ids = json.loads(row["txn_ids"] or "[]")
+        if ids:
+            placeholders = ','.join('?' for _ in ids)
+            if conn.execute(f"SELECT 1 FROM transactions t JOIN spending_accounts a ON a.account_id=t.account_id WHERE t.id IN ({placeholders}) LIMIT 1", ids).fetchone():
+                visible.append(row)
+        elif row["kind"] not in computed or row["key"] in current:
+            visible.append(row)
+    return visible
+
+
 def take_unsent(conn, settings: dict, now: datetime) -> dict:
     """Alerts waiting to be sent. Marks them sent unless quiet hours hold them back."""
     rows = [dict(r) for r in conn.execute(
         "SELECT * FROM alerts WHERE notified_at IS NULL AND dismissed_at IS NULL ORDER BY created_at, key"
     ).fetchall()]
+    rows = _relevant(conn, rows, settings, now.date())
     quiet = settings.get("quiet_hours", DEFAULTS["quiet_hours"])
     if rows and in_quiet_hours(quiet, now):
         return {"alerts": [], "held": len(rows), "reason": f"quiet hours ({quiet})"}
@@ -212,8 +235,9 @@ def listing(conn, include_dismissed=False, limit=50) -> list[dict]:
     sql = "SELECT * FROM alerts"
     if not include_dismissed:
         sql += " WHERE dismissed_at IS NULL"
-    sql += " ORDER BY severity = 'warn' DESC, created_at DESC, key LIMIT ?"
-    return [_public(dict(r)) for r in conn.execute(sql, (limit,)).fetchall()]
+    sql += " ORDER BY severity = 'warn' DESC, created_at DESC, key"
+    rows = _relevant(conn, conn.execute(sql).fetchall())
+    return [_public(dict(r)) for r in rows[:max(1, min(int(limit), 10000))]]
 
 
 def dismiss(conn, keys: list[str] | None) -> int:

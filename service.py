@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import alerts, charts, insights
 from .plaid import Plaid
-from .store import PLUGIN_ID, connect, get_meta, now_iso, today
+from . import connections
+from .store import PLUGIN_ID, connect as _connect, get_meta, now_iso, today
 
 SETTING_DEFAULTS = {**alerts.DEFAULTS, "plaid_env": "sandbox", "sync_minutes": 30}
 
@@ -28,9 +29,16 @@ def plaid(s: dict | None = None) -> Plaid:
     return Plaid((s or settings()).get("plaid_env", "sandbox"))
 
 
+def connect():
+    conn = _connect()
+    p = plaid()
+    connections.prepare(conn, p.env, p.secrets["get"])
+    return conn
+
+
 def has_live_items(conn) -> bool:
     """A Plaid connection to sync. Demo data and CSV imports have no token."""
-    return bool(conn.execute("SELECT 1 FROM items WHERE token_env IS NOT NULL LIMIT 1").fetchone())
+    return bool(conn.execute("SELECT 1 FROM active_items WHERE token_env IS NOT NULL LIMIT 1").fetchone())
 
 
 def sync(conn=None, force: bool = False) -> dict:

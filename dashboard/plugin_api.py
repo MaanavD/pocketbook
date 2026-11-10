@@ -33,6 +33,7 @@ insights = importlib.import_module(f"{_PKG}.insights")
 service = importlib.import_module(f"{_PKG}.service")
 store = importlib.import_module(f"{_PKG}.store")
 wealth = importlib.import_module(f"{_PKG}.wealth")
+connections = importlib.import_module(f"{_PKG}.connections")
 PlaidError = importlib.import_module(f"{_PKG}.plaid").PlaidError
 
 router = APIRouter()
@@ -42,7 +43,7 @@ async def _run(fn, *args):
     try:
         return await asyncio.to_thread(fn, *args)
     except PlaidError as e:
-        raise HTTPException(400, str(e)) from None
+        raise HTTPException(400, str(e).partition(": ")[2] or "The bank request could not be completed.") from None
     except (ValueError, KeyError) as e:
         raise HTTPException(400, str(e)) from None
 
@@ -56,7 +57,7 @@ def _cents(v):
 
 
 def _summary():
-    conn = store.connect()
+    conn = service.connect()
     t = store.today()
     s = service.settings()
     p = service.plaid(s)
@@ -82,10 +83,14 @@ def _summary():
         "rules": wealth.list_rules(conn),
         "purchases": purchases.summary(conn, t),
         "imports": imports.sources(conn),
+        "connections": connections.catalog(conn, p.env),
         "categories": {k: insights.label(k) for k in sorted(cats)},
         "setup": {"plaid_configured": p.configured, "plaid_env": p.env,
                   "linking": bool(store.get_meta(conn, "pending_link_token")),
-                  "live_items": service.has_live_items(conn)},
+                  "pending_link": p.link_status(conn),
+                  "live_items": service.has_live_items(conn),
+                  "has_connections": bool(conn.execute("SELECT 1 FROM items LIMIT 1").fetchone()),
+                  "can_load_demo": not any(conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() for table in ("items", "goals", "budgets", "rules", "purchases", "networth"))},
     }
 
 
@@ -115,10 +120,10 @@ async def summary():
 
 @router.get("/transactions")
 async def transactions(query: str = "", category: str = "", start: str = "", end: str = "",
-                       ids: str = "", limit: int = 100):
+                       ids: str = "", account_id: str = "", limit: int = 100):
     def go():
         return insights.find_transactions(
-            store.connect(), query=query or None, category=category or None, start=start or None,
+            service.connect(), query=query or None, category=category or None, account_id=account_id or None, start=start or None,
             end=end or None, ids=[i for i in ids.split(",") if i][:500] or None, limit=max(1, min(limit, 500)))
     return {"transactions": await _run(go)}
 
@@ -131,19 +136,19 @@ class BudgetBody(BaseModel):
 
 @router.post("/budgets/propose")
 async def propose():
-    return {"proposed": await _run(lambda: insights.propose_budgets(store.connect(), store.today()))}
+    return {"proposed": await _run(lambda: insights.propose_budgets(service.connect(), store.today()))}
 
 
 @router.post("/budgets/approve")
 async def approve(body: BudgetBody):
-    return {"approved": await _run(lambda: insights.approve_budgets(store.connect(), body.categories))}
+    return {"approved": await _run(lambda: insights.approve_budgets(service.connect(), body.categories))}
 
 
 @router.post("/budgets/set")
 async def set_budget(body: BudgetBody):
     if not body.category:
         raise HTTPException(400, "category required")
-    await _run(insights.set_budget, store.connect(), body.category, _cents(body.amount) if body.amount else None)
+    await _run(insights.set_budget, service.connect(), body.category, _cents(body.amount) if body.amount else None)
     return {"ok": True}
 
 
@@ -153,13 +158,13 @@ class KeysBody(BaseModel):
 
 @router.post("/alerts/dismiss")
 async def dismiss(body: KeysBody):
-    return {"dismissed": await _run(alerts.dismiss, store.connect(), body.keys)}
+    return {"dismissed": await _run(alerts.dismiss, service.connect(), body.keys)}
 
 
 @router.post("/sync")
 async def sync():
     def go():
-        conn = store.connect()
+        conn = service.connect()
         result = service.sync(conn, force=True)
         alerts.record(conn, alerts.detect(conn, store.today(), service.settings()))
         return result
@@ -168,22 +173,68 @@ async def sync():
 
 @router.post("/connect")
 async def connect_bank():
-    return await _run(lambda: service.plaid().start_link(store.connect()))
+    return await _run(lambda: service.plaid().start_link(service.connect()))
+
+
+class RepairBody(BaseModel):
+    item_id: str
+
+
+@router.post("/connect/repair")
+async def repair_bank(body: RepairBody):
+    return await _run(lambda: service.plaid().start_link(service.connect(), item_id=body.item_id))
 
 
 @router.post("/connect/finish")
 async def finish_bank():
     def go():
-        conn = store.connect()
-        added = service.plaid().finish_link(conn)
-        return {"added": added, "sync": service.sync(conn, force=True)}
+        conn = service.connect()
+        p = service.plaid()
+        try:
+            added = p.finish_link(conn)
+        except PlaidError as e:
+            if e.code in ("LINK_PENDING", "LINK_EXPIRED", "NO_LINK", "LINK_ENVIRONMENT_CHANGED", "LINK_FAILED", "LINK_CANCELLED"):
+                return {"status": "pending" if e.code == "LINK_PENDING" else "restart", "code": e.code,
+                        "message": str(e).partition(": ")[2]}
+            raise
+        return {"status": "connected", "added": added, "warnings": getattr(p, "link_warnings", []), "sync": service.sync(conn, force=True)}
     return await _run(go)
+
+
+@router.post("/connect/cancel")
+async def cancel_bank_link():
+    return service.plaid().cancel_link(service.connect())
+
+
+class BankBody(BaseModel):
+    item_id: str
+    enabled: bool
+
+
+@router.post("/connections")
+async def update_bank(body: BankBody):
+    await _run(connections.set_bank, service.connect(), body.item_id, body.enabled)
+    return {"ok": True}
+
+
+class AccountBody(BaseModel):
+    account_id: str
+    name: str | None = None
+    include_spending: bool | None = None
+    include_networth: bool | None = None
+
+
+@router.post("/accounts")
+async def update_account(body: AccountBody):
+    await _run(lambda: connections.set_account(service.connect(), body.account_id, name=body.name,
+        include_spending=body.include_spending, include_networth=body.include_networth))
+    return {"ok": True}
 
 
 @router.post("/test-bank")
 async def test_bank():
     def go():
-        conn = store.connect()
+        conn = service.connect()
         added = service.plaid().sandbox_link(conn)
         return {"added": added, "sync": service.sync(conn, force=True)}
     return await _run(go)
@@ -202,7 +253,7 @@ class GoalBody(BaseModel):
 @router.post("/goals")
 async def goals(body: GoalBody):
     def go():
-        conn = store.connect()
+        conn = service.connect()
         c = _cents
         if body.action == "add":
             wealth.add_goal(conn, body.name or "Goal", c(body.target) or 0, body.target_date or None,
@@ -226,7 +277,7 @@ class RuleBody(BaseModel):
 @router.post("/rules")
 async def rules(body: RuleBody):
     def go():
-        conn = store.connect()
+        conn = service.connect()
         if body.action == "add":
             wealth.add_rule(conn, body.match or "", insights.category_key(body.category or ""))
         elif body.action == "remove":
@@ -244,7 +295,7 @@ class RecatBody(BaseModel):
 @router.post("/transactions/category")
 async def recategorize(body: RecatBody):
     def go():
-        conn = store.connect()
+        conn = service.connect()
         return {"updated": insights.recategorize(conn, body.id, insights.category_key(body.category),
                                                  body.all_from_merchant)}
     return await _run(go)
@@ -257,7 +308,7 @@ class DemoBody(BaseModel):
 @router.post("/demo")
 async def sample_data(body: DemoBody):
     def go():
-        conn = store.connect()
+        conn = service.connect()
         if body.action == "clear":
             demo.clear(conn)
             return {"cleared": True}
@@ -274,7 +325,7 @@ class ImportBody(BaseModel):
 
 @router.post("/import")
 async def import_csv(body: ImportBody):
-    return await _run(lambda: imports.import_text(store.connect(), body.text, body.filename))
+    return await _run(lambda: imports.import_text(service.connect(), body.text, body.filename))
 
 
 class LifespanBody(BaseModel):
@@ -286,7 +337,7 @@ class LifespanBody(BaseModel):
 @router.post("/purchases/lifespan")
 async def lifespan(body: LifespanBody):
     def go():
-        conn = store.connect()
+        conn = service.connect()
         if body.hidden is not None:
             purchases.hide(conn, body.key, body.hidden)
         else:

@@ -56,6 +56,10 @@ container-type:inline-size;font-size:13px;line-height:1.45;font-variant-numeric:
 .pb-btn.ghost{border-color:transparent;background:transparent;color:var(--m)}.pb-btn.ghost:hover{color:inherit}
 .pb-btn.sm{padding:3px 9px;font-size:12px;border-radius:7px}
 .pb-input{border:1px solid var(--ln);border-radius:8px;padding:6px 10px;background:transparent;color:inherit;font:inherit;min-width:0}
+.pb input[role=switch]{appearance:none;width:32px;height:19px;border-radius:12px;position:relative;background:var(--ln);border:1px solid var(--ln);cursor:pointer;flex:none;margin:0}
+.pb input[role=switch]::after{content:"";position:absolute;width:13px;height:13px;top:2px;left:2px;border-radius:50%;background:#fff;transition:transform .15s}
+.pb input[role=switch]:checked{background:var(--ac);border-color:var(--ac)}.pb input[role=switch]:checked::after{transform:translateX(13px)}
+.pb input[role=switch]:disabled{opacity:.45;cursor:default}.pb input[role=switch]:focus-visible{outline:2px solid var(--ac);outline-offset:3px}
 .pb-input:focus{outline:2px solid color-mix(in srgb,var(--ac) 40%,transparent);outline-offset:-1px}
 .pb-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:550;white-space:nowrap}
 .pb-chip.good{color:var(--gn);background:color-mix(in srgb,var(--gn) 13%,transparent)}
@@ -321,14 +325,17 @@ const budgetNote = b => b.status === 'over' ? [`${money(-b.remaining_cents, true
 function TxnRow ({ t, sub, categories, api, onChanged }) {
   const [edit, setEdit] = useState(false)
   const [pick, setPick] = useState(null)
+  const [saveError, setSaveError] = useState(null)
   const apply = async all => {
-    await api('/transactions/category', { method: 'POST', body: { id: t.id, category: pick, all_from_merchant: all } })
-    setPick(null); setEdit(false); onChanged && onChanged()
+    try { await api('/transactions/category', { method: 'POST', body: { id: t.id, category: pick, all_from_merchant: all } })
+    setPick(null); setEdit(false); setSaveError(null); onChanged && onChanged()
+    } catch (e) { setSaveError(errorText(e)) }
   }
   const income = t.amount_cents < 0
   return h('div', { className: 'pb-row' },
     h(Avatar, { name: t.merchant }),
     h('div', { className: 'pb-grow' },
+      saveError && h('div', { className: 'pb-bad pb-small', role: 'alert' }, saveError),
       h('div', { className: 'pb-strong pb-ellipsis' }, t.merchant, t.pending && h('span', { style: { marginLeft: 8 } }, h(Chip, null, 'Pending'))),
       h('div', { className: 'pb-muted pb-small pb-ellipsis' }, sub)),
     pick ? h('div', { className: 'pb-flex', style: { gap: 6 } },
@@ -487,7 +494,7 @@ function Proposals ({ proposed, act, busy }) {
       const v = edits[p.category]
       return v !== undefined && v !== '' && Math.round(Number(v) * 100) !== p.proposed_cents
     })
-    for (const p of changed) await act('budget-set', { category: p.category, amount: Number(edits[p.category]) }, true)
+    for (const p of changed) { if (!await act('budget-set', { category: p.category, amount: Number(edits[p.category]) }, true)) return }
     const rest = proposed.filter(p => !changed.includes(p)).map(p => p.category)
     if (rest.length) await act('approve', { categories: rest })
     else await act('refresh')
@@ -505,7 +512,29 @@ function Proposals ({ proposed, act, busy }) {
     h(Btn, { primary: true, disabled: busy, onClick: save }, `Approve ${proposed.length} budgets`)))
 }
 
-function BudgetPage ({ b, act, busy }) {
+function BudgetEditor ({ b, categories, act, busy }) {
+  const [category, setCategory] = useState('')
+  const [amount, setAmount] = useState('')
+  const existing = b.budgets.find(row => row.category === category)
+  const choose = e => {
+    const key = e.target.value
+    setCategory(key)
+    const row = b.budgets.find(x => x.category === key)
+    setAmount(row ? String(row.budget_cents / 100) : '')
+  }
+  const save = async () => {
+    if (await act('budget-set', { category, amount: Number(amount) })) { setCategory(''); setAmount('') }
+  }
+  return h(Card, { title: 'Set a category budget', sub: 'Choose a category to add or change its monthly amount.' },
+    h('div', { className: 'pb-flex pb-wrap' },
+      h('select', { className: 'pb-input', 'aria-label': 'Budget category', value: category, onChange: choose },
+        h('option', { value: '' }, 'Choose a category'), Object.entries(categories).map(([key, label]) => h('option', { key, value: key }, label))),
+      h('input', { className: 'pb-input', 'aria-label': 'Monthly budget amount', placeholder: 'Monthly amount ($)', inputMode: 'decimal', value: amount, onChange: e => setAmount(e.target.value) }),
+      h(Btn, { primary: true, disabled: busy || !category || !Number.isFinite(Number(amount)) || Number(amount) <= 0, onClick: save }, existing ? 'Update budget' : 'Add budget'),
+      existing && h(Btn, { disabled: busy, onClick: () => act('budget-set', { category, amount: null }) }, 'Remove budget')))
+}
+
+function BudgetPage ({ b, categories = {}, act, busy }) {
   const has = b.budgets.length > 0
   const left = b.total_budget_cents - b.total_spent_cents
   const elapsed = 100 * b.days_elapsed / b.days_in_month
@@ -532,6 +561,7 @@ function BudgetPage ({ b, act, busy }) {
             h('div', { className: `pb-small ${cls}`, style: { marginTop: 5 } }, note,
               x.status !== 'over' && x.projected_cents > x.spent_cents ? h('span', { className: 'pb-muted' }, x.status === 'ok' ? ` · on pace for ${money(x.projected_cents, true)}` : '') : null)))
       }))),
+    h(BudgetEditor, { b, categories, act, busy }),
     h(Proposals, { proposed: b.proposed, act, busy }),
     !has && !b.proposed.length && h(Card, { title: 'No budgets yet' },
       h('div', { className: 'pb-muted', style: { marginBottom: 12 } }, 'Hermes looks at your last three months and proposes an amount for each category. Nothing applies until you approve it.'),
@@ -621,7 +651,8 @@ function NetWorthPage ({ nw, inv, today }) {
       h('div', { style: { marginTop: 16 } }, n > 1
         ? h(LineChart, { n, zero: false, series: [{ values: pts.map(p => p.net_cents), color: 'var(--ac)', area: true, dot: true }], xTicks,
           tip: i => ({ title: longDay(pts[i].date), rows: [['var(--ac)', 'Net worth', money(pts[i].net_cents, true)], [null, 'Assets', money(pts[i].assets_cents, true)], [null, 'Liabilities', money(pts[i].liabilities_cents, true)]] }) })
-        : h('div', { className: 'pb-muted' }, 'History starts with your first sync.'))),
+        : h('div', { className: 'pb-muted' }, 'History starts with your first sync.')),
+      nw.history_note && h('p', { className: 'pb-muted pb-small' }, nw.history_note)),
     h('div', { className: 'pb-two' },
       h(Side, { title: 'Assets', accounts: nw.accounts.filter(a => a.side === 'asset'), total: nw.assets_cents, tone: '' }),
       h(Side, { title: 'Liabilities', accounts: nw.accounts.filter(a => a.side === 'liability'), total: nw.liabilities_cents, tone: '' })),
@@ -660,7 +691,7 @@ function InvestmentsCard ({ inv }) {
 
 // ---------- goals ----------
 
-const GOAL_STATUS = { on_track: ['On track', 'good', 'var(--gn)'], behind: ['Behind', 'warn', 'var(--yl)'], overdue: ['Past due', 'bad', 'var(--rd)'],
+const GOAL_STATUS = { paused: ['Account excluded', 'neutral', 'var(--m)'], on_track: ['On track', 'good', 'var(--gn)'], behind: ['Behind', 'warn', 'var(--yl)'], overdue: ['Past due', 'bad', 'var(--rd)'],
   done: ['Reached', 'good', 'var(--gn)'], no_date: ['No date', 'neutral', 'var(--ac)'] }
 const goalEmoji = name => {
   const s = name.toLowerCase()
@@ -671,7 +702,7 @@ const goalEmoji = name => {
 function SavedEditor ({ g, post }) {
   const [v, setV] = useState(null)
   if (v === null) return h(Btn, { small: true, onClick: () => setV(String(g.current_cents / 100)) }, 'Update amount')
-  const save = () => { if (v !== '' && !isNaN(Number(v))) post('/goals', { action: 'update', id: g.id, saved: Number(v) }); setV(null) }
+  const save = async () => { if (v !== '' && Number.isFinite(Number(v)) && await post('/goals', { action: 'update', id: g.id, saved: Number(v) })) setV(null) }
   return h('span', { className: 'pb-flex', style: { gap: 6 } },
     h('input', { className: 'pb-input', style: { width: 100, textAlign: 'right', padding: '3px 8px' }, autoFocus: true, inputMode: 'decimal', value: v,
       onChange: e => setV(e.target.value), onKeyDown: e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setV(null) } }),
@@ -685,7 +716,7 @@ function GoalCard ({ g, post }) {
       h('div', { className: 'pb-flex' },
         h('div', { className: 'pb-tile', style: { width: 40, height: 40, fontSize: 20, borderRadius: 11 } }, goalEmoji(g.name)),
         h('div', null, h('div', { className: 'pb-strong', style: { fontSize: 15 } }, g.name),
-          h('div', { className: 'pb-muted pb-small' }, g.account ? `Follows ${g.account}` : 'Updated by you'))),
+          h('div', { className: 'pb-muted pb-small' }, g.account_id ? g.account ? `Follows ${g.account}` : 'Paused while this account is excluded' : 'Updated by you'))),
       h(Chip, { tone }, word)),
     h('div', { className: 'pb-flex', style: { gap: 16 } },
       h(Ring, { pct: g.pct, color }),
@@ -707,9 +738,9 @@ function GoalsPage ({ goals, accounts, post, busy }) {
   const [open, setOpen] = useState(false)
   const set = k => e => setForm({ ...form, [k]: e.target.value })
   const add = async () => {
-    await post('/goals', { action: 'add', name: form.name, target: Number(form.target), target_date: form.target_date || null,
+    const ok = await post('/goals', { action: 'add', name: form.name, target: Number(form.target), target_date: form.target_date || null,
       account_id: form.account_id || null, saved: form.account_id ? null : Number(form.saved || 0) })
-    setForm(blank); setOpen(false)
+    if (ok) { setForm(blank); setOpen(false) }
   }
   return h('div', { className: 'pb-col' },
     open && h(Card, { title: 'New goal', sub: 'A goal can follow a savings account balance or an amount you update.' },
@@ -735,19 +766,40 @@ function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy, a
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('')
   const [rows, setRows] = useState(data.recent)
+  const [account, setAccount] = useState('')
+  const [limit, setLimit] = useState(100)
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [queryError, setQueryError] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [retry, setRetry] = useState(0)
+  useEffect(() => { if (account && !data.accounts.some(a => a.account_id === account)) setAccount('') }, [account, data.accounts])
   useEffect(() => {
-    if (filter) { api(`/transactions?ids=${encodeURIComponent(filter.ids.join(','))}`).then(r => setRows(r.transactions)).catch(() => {}); return }
-    const t = setTimeout(() => api(`/transactions?limit=150&query=${encodeURIComponent(q)}&category=${encodeURIComponent(cat)}`).then(r => setRows(r.transactions)).catch(() => {}), q ? 250 : 0)
-    return () => clearTimeout(t)
-  }, [q, cat, filter, data])
+    let cancelled = false
+    setLoading(true); setQueryError(null)
+    const path = filter ? `/transactions?ids=${encodeURIComponent(filter.ids.join(','))}`
+      : `/transactions?limit=${limit}&query=${encodeURIComponent(q)}&category=${encodeURIComponent(cat)}&account_id=${encodeURIComponent(account)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+    const timer = setTimeout(() => api(path).then(r => { if (!cancelled) setRows(r.transactions) })
+      .catch(e => { if (!cancelled) setQueryError(errorText(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) }), q ? 250 : 0)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [q, cat, account, start, end, limit, filter, data, retry])
   return h('div', { className: 'pb-split' },
     h(Card, { flush: true, title: filter ? filter.title : 'Transactions', sub: filter ? 'Charges behind this alert' : null,
-      right: filter ? h(Btn, { small: true, onClick: clearFilter }, 'Show all') : h('div', { className: 'pb-flex', style: { gap: 8 } },
+      right: filter ? h(Btn, { small: true, onClick: clearFilter }, 'Show all') : h('div', { className: 'pb-flex pb-wrap', style: { gap: 8 } },
+        h('select', { className: 'pb-input', 'aria-label': 'Filter by account', value: account, onChange: e => { setAccount(e.target.value); setLimit(100) } },
+          h('option', { value: '' }, 'All accounts'), data.accounts.map(a => h('option', { key: a.account_id, value: a.account_id }, a.name))),
+        h('input', { className: 'pb-input', type: 'date', 'aria-label': 'Transactions from', value: start, onChange: e => { setStart(e.target.value); setLimit(100) } }),
+        h('input', { className: 'pb-input', type: 'date', 'aria-label': 'Transactions through', value: end, onChange: e => { setEnd(e.target.value); setLimit(100) } }),
         h('input', { className: 'pb-input', style: { width: 200 }, placeholder: 'Search merchants', value: q, onChange: e => setQ(e.target.value) }),
         h('select', { className: 'pb-input', value: cat, onChange: e => setCat(e.target.value) },
           h('option', { value: '' }, 'All categories'),
           Object.entries(data.categories).map(([k, l]) => h('option', { key: k, value: k }, `${emoji(k)} ${l}`)))) },
-    h(TxnList, { rows, today: data.overview.today, grouped: true, categories: data.categories, api, onChanged: load })),
+    queryError && h('div', { className: 'pb-notice err', role: 'alert' }, h('span', null, `Could not load transactions: ${queryError}`), h(Btn, { small: true, onClick: () => setRetry(retry + 1) }, 'Retry')),
+    loading && h('div', { className: 'pb-muted', role: 'status', style: { padding: 12 } }, 'Loading transactions…'),
+    !loading && !queryError && h(TxnList, { rows, today: data.overview.today, grouped: true, categories: data.categories, api, onChanged: load }),
+    !filter && !loading && !queryError && rows.length >= limit && limit < 500 && h(Btn, { onClick: () => setLimit(Math.min(500, limit + 100)) }, 'Show more transactions'),
+    !filter && rows.length >= 500 && h('p', { className: 'pb-muted' }, 'Showing the first 500 matches. Narrow your search or choose an account.')),
     h('div', { className: 'pb-col' },
       h(Rules, { rules: data.rules, categories: data.categories, post, busy }),
       h(ImportCard, { sources: data.imports, busy, onImport: (filename, text) => act('import', { filename, text }) }),
@@ -763,7 +815,7 @@ function TransactionsPage ({ data, api, filter, clearFilter, load, post, busy, a
 function Rules ({ rules, categories, post, busy }) {
   const [match, setMatch] = useState('')
   const [cat, setCat] = useState('')
-  const add = async () => { await post('/rules', { action: 'add', match, category: cat }); setMatch(''); setCat('') }
+  const add = async () => { if (await post('/rules', { action: 'add', match, category: cat })) { setMatch(''); setCat('') } }
   return h(Card, { title: 'Rules', sub: 'Charges whose merchant contains the text get the category, now and on every sync.' },
     h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
       h('input', { className: 'pb-input', placeholder: 'Merchant contains', value: match, onChange: e => setMatch(e.target.value) }),
@@ -857,29 +909,95 @@ function ImportCard ({ sources, onImport, busy }) {
     h(ImportButton, { onImport, busy }))
 }
 
+// ---------- bank and account controls ----------
+
+function errorText (error) {
+  let message = String(error && error.message || error || 'Something went wrong. Try again.')
+  const start = message.indexOf('{"detail"')
+  if (start >= 0) {
+    try {
+      const detail = JSON.parse(message.slice(start, message.lastIndexOf('}') + 1)).detail
+      message = typeof detail === 'string' ? detail : detail.message || 'The request could not be completed.'
+    } catch (_) {}
+  }
+  return message.replace(/^(Error:\s*)+/, '').replace(/^[A-Z_]+:\s*/, '')
+}
+
+function linkNotice (result) {
+  const problems = [...(result.warnings || []), ...((result.sync || {}).errors || []), ...((result.sync || {}).notes || [])]
+  const names = (result.added || []).map(bank => bank.institution).join(', ')
+  return [`Bank sign-in complete: ${names}.` + (problems.length ? ` ${problems.join(' ')}` : ''), problems.length > 0]
+}
+
+function AccountControls ({ account: a, disabled, post, busy }) {
+  const [name, setName] = useState(a.name)
+  useEffect(() => setName(a.name), [a.name])
+  return h('div', { className: 'pb-card', style: { padding: 14 } },
+    h('div', { className: 'pb-flex pb-between pb-wrap' },
+      h('div', null, h('strong', null, a.name), h('div', { className: 'pb-muted pb-small' },
+        [a.type, a.mask && `••${a.mask}`, a.currency || 'USD', a.closed ? 'Closed at bank' : null].filter(Boolean).join(' · '))),
+      h('span', { className: 'pb-strong' }, money(a.current_cents, true))),
+    h('div', { className: 'pb-flex pb-wrap', style: { marginTop: 10 } },
+      h('input', { className: 'pb-input', 'aria-label': `Nickname for ${a.name}`, value: name, maxLength: 120,
+        disabled: busy, onChange: e => setName(e.target.value) }),
+      h(Btn, { small: true, disabled: busy || !name.trim() || name.trim() === a.name,
+        onClick: () => post('/accounts', { account_id: a.account_id, name: name.trim() }) }, 'Save name'),
+      a.custom_name && h(Btn, { small: true, ghost: true, disabled: busy, onClick: () => post('/accounts', { account_id: a.account_id, name: '' }) }, 'Reset name')),
+    h('div', { className: 'pb-flex pb-wrap', style: { marginTop: 12 } },
+      h('label', { className: 'pb-flex' }, h('input', { type: 'checkbox', role: 'switch',
+        'aria-label': `Include ${a.name} in spending`, checked: !!a.include_spending, disabled: disabled || busy,
+        onChange: e => post('/accounts', { account_id: a.account_id, include_spending: e.target.checked }) }), 'Spending & budgets'),
+      h('label', { className: 'pb-flex' }, h('input', { type: 'checkbox', role: 'switch',
+        'aria-label': `Include ${a.name} in net worth`, checked: !!a.include_networth, disabled: disabled || busy || !!a.closed,
+        onChange: e => post('/accounts', { account_id: a.account_id, include_networth: e.target.checked }) }), 'Net worth')),
+    a.currency && a.currency !== 'USD' && h('p', { className: 'pb-small pb-warn' }, 'This currency is not supported. It is excluded from USD totals.'))
+}
+
+function BankManager ({ connections = [], environment, post, busy, act, linking = false }) {
+  return h('div', { className: 'pb-col' },
+    h('div', { className: 'pb-muted' }, 'Turn a bank off to exclude it from refresh and all totals. Its accounts and history are kept. You can also choose spending and net worth separately for each account.'),
+    !connections.length && h(Card, { title: 'No bank connections yet' }, 'Connect a bank above or import a CSV.'),
+    connections.map(bank => h(Card, { key: bank.item_id, title: bank.institution || 'Bank',
+      sub: `${bank.environment || 'Imported or sample data'} · ${bank.last_sync ? `last refreshed ${ago(bank.last_sync)}` : 'not refreshed yet'}`,
+      right: h('label', { className: 'pb-flex' },
+        h('input', { type: 'checkbox', role: 'switch', 'aria-label': `Include ${bank.institution || 'bank'}`,
+          checked: !!bank.enabled && bank.environment_match, disabled: busy || !bank.environment_match,
+          onChange: e => post('/connections', { item_id: bank.item_id, enabled: e.target.checked }) }), !bank.environment_match ? 'Excluded' : bank.enabled ? 'On' : 'Off') },
+      !bank.environment_match && h('div', { className: 'pb-notice', style: { marginBottom: 12 } },
+        `This ${bank.environment} connection is kept separately and excluded while using ${environment}. It will not be refreshed.`),
+      !bank.enabled && h('p', { className: 'pb-muted' }, 'Off. Excluded from refresh, spending, budgets and net worth. History is kept.'),
+      bank.environment_match && bank.enabled && bank.error && h('p', { className: 'pb-warn' },
+        bank.error === 'ITEM_LOGIN_REQUIRED' ? 'This bank needs you to sign in again.' : `Last refresh did not finish (${bank.error}). Other banks can still refresh.`),
+      bank.environment_match && bank.environment && h(Btn, { small: true, disabled: busy || linking, onClick: () => act('repair', { item_id: bank.item_id }) }, 'Repair bank sign-in'),
+      h('div', { className: 'pb-col', style: { gap: 10 } }, bank.accounts.map(a => h(AccountControls,
+        { key: a.account_id, account: a, disabled: !bank.enabled || !bank.environment_match, post, busy }))))))
+}
+
 // ---------- setup ----------
 
 function Setup ({ setup, act, busy }) {
   const ready = setup.plaid_configured
-  return h(Card, { title: 'Connect your accounts', sub: 'Pocketbook reads balances and transactions through Plaid with your own keys.' },
-    h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '4px 0 18px' } },
+  return h(Card, { title: setup.has_connections ? 'Add another bank' : 'Connect your accounts', sub: 'Pocketbook reads balances and transactions through Plaid with your own keys.' },
+    !setup.has_connections && h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '4px 0 18px' } },
       h('div', { className: 'pb-step' }, h('b', null, '1'), h('div', null, 'For real banks, request Production access in the Plaid Dashboard and complete its approval steps. Sandbox keys only connect simulated banks.')),
       h('div', { className: 'pb-step' }, h('b', null, '2'), h('div', null, 'Enter your client ID and Production secret in Settings, Plugins, pocketbook, and select production. For test banks, use sandbox credentials and sandbox. ',
         h(Chip, { tone: ready ? 'good' : 'neutral' }, ready ? `Keys found (${setup.plaid_env})` : 'No keys yet'))),
       h('div', { className: 'pb-step' }, h('b', null, '3'), h('div', null, 'Connect a bank. Pocketbook syncs two years of history and Hermes proposes budgets from it.'))),
     h('div', { className: 'pb-flex pb-wrap' },
-      h(Btn, { primary: true, disabled: !ready || busy, onClick: () => act('connect') }, 'Connect a bank'),
+      h(Btn, { primary: true, disabled: !ready || busy || !!setup.linking, onClick: () => act('connect') }, 'Connect a bank'),
       setup.plaid_env === 'sandbox' && h(Btn, { disabled: !ready || busy, onClick: () => act('test-bank') }, 'Add Plaid test bank'),
       h(ImportButton, { busy, label: 'Import from Monarch or a CSV', onImport: (name, text) => act('import', { filename: name, text }) }),
-      h(Btn, { ghost: true, disabled: busy, onClick: () => act('demo') }, 'Try sample data')),
+      setup.can_load_demo !== false && h(Btn, { ghost: true, disabled: busy, onClick: () => act('demo') }, 'Try sample data')),
     setup.linking && h('div', { className: 'pb-notice', style: { marginTop: 14 } },
-      h('span', null, 'Finished signing in to your bank?'),
-      h(Btn, { primary: true, small: true, disabled: busy, onClick: () => act('finish') }, 'Finish connecting')))
+      h('span', null, 'Waiting for bank sign-in. Complete the browser flow, then check the connection.'),
+      h(Btn, { primary: true, small: true, disabled: busy, onClick: () => act('finish') }, 'Check connection'),
+      setup.pending_link && setup.pending_link.environment === setup.plaid_env && setup.pending_link.url && h(Btn, { small: true, disabled: busy, onClick: () => openUrl(setup.pending_link.url) }, 'Reopen sign-in'),
+      h(Btn, { small: true, ghost: true, disabled: busy, onClick: () => act('cancel-link') }, 'Cancel sign-in')))
 }
 
 // ---------- app ----------
 
-const TABS = [['overview', 'Overview'], ['budget', 'Budget'], ['cashflow', 'Cash flow'], ['wealth', 'Net worth'], ['goals', 'Goals'], ['stuff', 'Purchases'], ['activity', 'Transactions']]
+const TABS = [['overview', 'Overview'], ['budget', 'Budget'], ['cashflow', 'Cash flow'], ['wealth', 'Net worth'], ['goals', 'Goals'], ['stuff', 'Purchases'], ['activity', 'Transactions'], ['accounts', 'Accounts']]
 
 function FinanceApp () {
   const [data, setData] = useState(null)
@@ -889,6 +1007,7 @@ function FinanceApp () {
   const [filter, setFilter] = useState(null)
   const [tab, setTab] = useState('overview')
   const [manageBanks, setManageBanks] = useState(false)
+  const [linkChecking, setLinkChecking] = useState(false)
 
   const load = useCallback(() => api('/summary').then(d => { setData(d); setError(null) }).catch(e => setError(String(e && e.message || e))), [])
   useEffect(() => {
@@ -902,12 +1021,16 @@ function FinanceApp () {
     setBusy(true); setNotice(null)
     try {
       const post = (path, b) => api(path, { method: 'POST', body: b || {} })
-      if (what === 'connect') {
-        const r = await post('/connect')
+      if (what === 'connect' || what === 'repair') {
+        const r = await post(what === 'repair' ? '/connect/repair' : '/connect', body)
         if (r.url) openUrl(r.url)
-        setNotice(['Plaid opened in your browser. Sign in to your bank, then press Finish connecting.'])
+        setNotice(['Plaid opened in your browser. Finish signing in there. Pocketbook will check for the completed connection automatically.'])
       } else if (what === 'finish') {
-        const r = await post('/connect/finish'); setNotice([`Connected ${r.added.map(a => a.institution).join(', ')}.`])
+        const r = await post('/connect/finish')
+        if (r.status && r.status !== 'connected') { setNotice([r.message, false]); if (r.status === 'restart') await load(); return }
+        setNotice(linkNotice(r))
+      } else if (what === 'cancel-link') {
+        const r = await post('/connect/cancel'); setNotice([r.message])
       } else if (what === 'test-bank') {
         await post('/test-bank'); setNotice(['Plaid test bank connected and synced.'])
       } else if (what === 'demo') {
@@ -917,10 +1040,11 @@ function FinanceApp () {
       } else if (what === 'sync') {
         const r = await post('/sync')
         const problems = [...(r.errors || []), ...(r.notes || [])]
+        const skipped = (r.skipped_items || []).map(x => typeof x === 'string' ? x : `${x.institution || 'Bank'}: ${x.reason}`).join(' ')
         setNotice([r.skipped ? `Refresh skipped: ${r.skipped}.` :
           `Refreshed ${r.items} bank connections and ${r.accounts || 0} accounts: ${r.added} new transactions, ${r.modified} updated, ${r.removed} removed. ` +
           'Balances and holdings use the latest data available from Plaid; bank updates may arrive later. ' +
-          (r.environment === 'sandbox' ? 'Plaid sandbox accounts contain simulated data. ' : '') + problems.join(' '), problems.length > 0])
+          (r.environment === 'sandbox' ? 'Plaid sandbox accounts contain simulated data. ' : '') + problems.join(' ') + (skipped ? ` ${skipped}` : ''), problems.length > 0])
       } else if (what === 'propose') {
         await post('/budgets/propose')
       } else if (what === 'approve') {
@@ -935,25 +1059,59 @@ function FinanceApp () {
         await post('/alerts/dismiss', body)
       }
       if (!quiet) await load()
+      return true
     } catch (e) {
-      setNotice([`Error: ${e && e.message || e}`, true])
+      setNotice([errorText(e), true]); return false
     } finally {
       setBusy(false)
     }
   }, [load])
 
+  useEffect(() => {
+    if (!data || !data.setup.linking || busy) return
+    let stopped = false, running = false, attempts = 0
+    const check = async () => {
+      if (stopped || running) return
+      running = true; setLinkChecking(true)
+      try {
+        const result = await api('/connect/finish', { method: 'POST', body: {} })
+        if (stopped) return
+        if (result.status === 'connected' || (!result.status && result.added)) {
+          clearInterval(timer)
+          setNotice(linkNotice(result))
+          await load()
+        } else if (result.status === 'restart') {
+          clearInterval(timer); setNotice([result.message, false])
+        }
+        if (++attempts >= 60) {
+          clearInterval(timer)
+          setNotice(['Still waiting for the bank. Finish signing in, then use Check connection.', false])
+        }
+      } catch (e) {
+        if (!stopped) { clearInterval(timer); setNotice([errorText(e), true]) }
+      } finally {
+        running = false
+        if (!stopped) setLinkChecking(false)
+      }
+    }
+    const timer = setInterval(check, 5000)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [data && data.setup.linking, data && data.setup.plaid_env, busy, load])
+
   const style = h('style', null, CSS)
-  if (error && !data) return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page' }, h(Card, { title: 'Finance' }, h('div', { className: 'pb-muted' }, `Could not load: ${error}. Is the pocketbook plugin enabled?`))))
+  if (error && !data) return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page' }, h(Card, { title: 'Finance' }, h('div', { className: 'pb-muted' }, `Could not load Finance: ${errorText(error)}`), h(Btn, { onClick: load }, 'Retry'))))
   if (!data) return h('div', { className: 'pb' }, style, h('div', { className: 'pb-page pb-muted' }, 'Loading…'))
 
   const o = data.overview
   const empty = !o.accounts
+  const hasStoredAccounts = !!(data.connections || []).length
+  const managing = manageBanks || tab === 'accounts'
   const showTxns = (ids, title) => { setFilter({ ids, title }); setTab('activity') }
   const post = async (path, body) => {
     setBusy(true)
-    try { await api(path, { method: 'POST', body }); await load() } catch (e) { setNotice([`Error: ${e && e.message || e}`, true]) } finally { setBusy(false) }
+    try { await api(path, { method: 'POST', body }); await load(); return true } catch (e) { setNotice([errorText(e), true]); return false } finally { setBusy(false) }
   }
-  const go = k => () => { setFilter(null); setTab(k) }
+  const go = k => () => { setFilter(null); setManageBanks(false); setTab(k) }
   const onImport = (filename, text) => act('import', { filename, text })
   const tabs = TABS.map(([k, l]) => [k, k === 'goals' && data.goals.length ? `${l} ${data.goals.length}` : k === 'budget' && data.budgets.proposed.length ? `${l} •` : l])
 
@@ -961,18 +1119,21 @@ function FinanceApp () {
     h('header', { className: 'pb-head' },
       h('div', null,
         h('h1', { className: 'pb-title' }, 'Finance'),
-        h('div', { className: 'pb-sub' }, empty ? 'No accounts connected' : `${o.accounts} accounts · synced ${ago(o.last_sync)}`,
+        h('div', { className: 'pb-sub' }, empty ? 'No accounts included' : `${o.accounts} accounts · synced ${ago(o.last_sync)}`,
           o.demo && h(Chip, { tone: 'accent' }, 'Sample data'),
           data.setup.live_items && data.setup.plaid_env === 'sandbox' && h(Chip, { tone: 'accent' }, 'Plaid sandbox · test data'))),
-      !empty && h('div', { className: 'pb-flex' },
+      (!empty || hasStoredAccounts) && h('div', { className: 'pb-flex pb-wrap' },
         o.demo && h(Btn, { ghost: true, disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
-        !o.demo && h(Btn, { disabled: busy, onClick: () => setManageBanks(!manageBanks) }, manageBanks ? 'Close bank setup' : 'Manage banks'),
+        !o.demo && h(Btn, { disabled: busy, onClick: () => { setManageBanks(!manageBanks); setTab(manageBanks ? 'overview' : 'accounts') } }, manageBanks ? 'Close bank setup' : 'Manage banks'),
         h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Refreshing…' : 'Refresh all'))),
+    error && h('div', { className: 'pb-notice err', role: 'alert' }, h('span', null, `Could not refresh Finance. Showing the last loaded data. ${errorText(error)}`), h(Btn, { small: true, onClick: load }, 'Retry')),
     notice && h('div', { className: `pb-notice${notice[1] ? ' err' : ''}` }, h('span', null, notice[0]), h(Btn, { small: true, ghost: true, onClick: () => setNotice(null) }, '✕')),
-    (empty || !data.setup.live_items || manageBanks) && !o.demo && h(Setup, { setup: data.setup, act, busy }),
-    !empty && h('nav', { className: 'pb-nav', role: 'tablist' },
+    (empty || !data.setup.live_items || managing) && !o.demo && h(Setup, { setup: data.setup, act, busy: busy || linkChecking }),
+    (!empty || hasStoredAccounts) && h('nav', { className: 'pb-nav', role: 'tablist' },
       tabs.map(([k, l]) => h('button', { key: k, role: 'tab', 'aria-selected': tab === k, onClick: go(k) }, l))),
-    empty ? null
+    managing && h(BankManager, { connections: data.connections || [], environment: data.setup.plaid_env, post, busy, act, linking: data.setup.linking }),
+    tab === 'accounts' ? null
+      : empty ? h(Card, { title: 'Choose accounts to include' }, 'Open Manage banks to turn connections on. Turning a bank off keeps its history.')
       : tab === 'overview' ? h('div', { className: 'pb-split' },
         h('div', { className: 'pb-col' },
           h(SpendingCard, { o, pace: data.pace, budget: data.budgets.total_budget_cents }),
@@ -984,7 +1145,7 @@ function FinanceApp () {
           h(NetWorthMini, { nw: data.networth, go: go('wealth') }),
           h(Upcoming, { bills: o.upcoming_bills, today: o.today, reorders: data.purchases.repeats.filter(r => r.due), go: go('stuff') }),
           h(GoalsMini, { goals: data.goals, go: go('goals') })))
-        : tab === 'budget' ? h(BudgetPage, { b: data.budgets, act, busy })
+        : tab === 'budget' ? h(BudgetPage, { b: data.budgets, categories: data.categories, act, busy })
           : tab === 'cashflow' ? h(CashFlowPage, { o, months: data.months, spending: data.spending })
             : tab === 'wealth' ? h(NetWorthPage, { nw: data.networth, inv: data.investments, today: o.today })
               : tab === 'goals' ? h(GoalsPage, { goals: data.goals, accounts: data.accounts, post, busy })

@@ -162,6 +162,7 @@ def test_link_keeps_banks_that_worked_when_one_exchange_fails():
     store.set_meta(c, "pending_link_token", "lt")
     assert p.finish_link(c) == [{"item_id": "item-1", "institution": "Chase"}]
     assert store.get_meta(c, "pending_link_token") == ""  # a retry would fail on the spent token
+    assert "INVALID_PUBLIC_TOKEN" in p.link_warnings[0]
 
 
 def test_unsaved_access_token_is_not_left_open_at_plaid():

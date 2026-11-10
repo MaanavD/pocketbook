@@ -9,7 +9,8 @@ import webbrowser
 from . import demo, imports, service
 from .insights import category_key
 from .plaid import PlaidError
-from .store import connect, today
+from .store import today
+from .service import connect
 
 
 def setup(parser) -> None:
@@ -21,6 +22,7 @@ def setup(parser) -> None:
     subs.add_parser("check", help="Run the alert check and print new alerts")
     d = subs.add_parser("demo", help="Load six months of sample data (or --clear it)")
     d.add_argument("--clear", action="store_true")
+    subs.add_parser("cancel-link", help="Clear pending bank sign-in; close the Plaid browser tab too")
     c = subs.add_parser("charge", help="Add a sample card charge dated today (demo data only)")
     c.add_argument("merchant")
     c.add_argument("amount", type=float)
@@ -43,9 +45,13 @@ def _run(args) -> None:
     conn = connect()
     if cmd == "status":
         print(service.summary_text(conn))
-        for r in conn.execute("SELECT institution, status, error, last_sync FROM items"):
-            print(f"  {r['institution']}: {r['status']}{' (' + r['error'] + ')' if r['error'] else ''}, "
+        from .connections import catalog
+        for r in catalog(conn, service.plaid().env):
+            state = "excluded in this environment" if not r["environment_match"] else "off" if not r["enabled"] else r["status"]
+            print(f"  {r['institution']}: {state}, {r['environment'] or 'imported/sample'}, "
                   f"last sync {r['last_sync'] or 'never'}")
+    elif cmd == "cancel-link":
+        print(service.plaid().cancel_link(conn)["message"])
     elif cmd == "connect":
         p = service.plaid()
         link = p.start_link(conn)
@@ -61,9 +67,11 @@ def _run(args) -> None:
                     raise  # a real failure; waiting ten minutes will not fix it
                 continue
             print("Connected:", ", ".join(a["institution"] for a in added))
+            for warning in getattr(p, "link_warnings", []):
+                print(warning)
             print(json.dumps(service.sync(conn, force=True), indent=2))
             return
-        print("Timed out. Run `hermes pocketbook connect` again when ready.")
+        print("Still waiting. Finish from Finance, or run `hermes pocketbook cancel-link` before starting again.")
     elif cmd == "test-bank":
         added = service.plaid().sandbox_link(conn)
         print("Connected", added["institution"])

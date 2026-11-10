@@ -41,7 +41,7 @@ SPEND_SQL = (
     " AND COALESCE(a.type, 'depository') IN ('depository', 'credit')"
 )
 CAT_SQL = "COALESCE(t.user_category, t.rule_category, t.category, 'OTHER')"
-FROM_SQL = "FROM transactions t LEFT JOIN accounts a ON a.account_id = t.account_id"
+FROM_SQL = "FROM transactions t JOIN spending_accounts a ON a.account_id = t.account_id"
 
 
 def label(category: str) -> str:
@@ -138,6 +138,10 @@ def monthly_totals(conn, today: date, months: int = 6) -> list[dict]:
 def propose_budgets(conn, today: date, months: int = 3) -> list[dict]:
     """Median of the last `months` complete months per category, rounded up to $10.
     Categories under $20/month are skipped. Active budgets keep their amount; only the proposal updates."""
+    from .connections import scope_key
+    with _lock, conn:
+        conn.execute("UPDATE budgets SET proposed_cents=NULL, basis=NULL")
+        conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('budget_proposal_scope',?)", (scope_key(conn, "spending"),))
     current = month_of(today)
     span = [shift_month(current, -i) for i in range(months, 0, -1)]
     per_month = []
@@ -168,12 +172,16 @@ def propose_budgets(conn, today: date, months: int = 3) -> list[dict]:
 
 
 def approve_budgets(conn, categories: list[str] | None = None) -> list[str]:
+    from .connections import scope_key
+    from .store import get_meta
+    if get_meta(conn, "budget_proposal_scope") != scope_key(conn, "spending"):
+        raise ValueError("Account selection changed. Generate new budget proposals before approving.")
     rows = conn.execute("SELECT category FROM budgets WHERE proposed_cents IS NOT NULL").fetchall()
     chosen = [r[0] for r in rows if not categories or r[0] in categories]
     with _lock:
         for cat in chosen:
             conn.execute(
-                "UPDATE budgets SET amount_cents=proposed_cents, status='active', updated_at=? WHERE category=?",
+                "UPDATE budgets SET amount_cents=proposed_cents, proposed_cents=NULL, status='active', updated_at=? WHERE category=?",
                 (now_iso(), cat),
             )
         conn.commit()
@@ -187,7 +195,7 @@ def set_budget(conn, category: str, amount_cents: int | None) -> None:
         else:
             conn.execute(
                 "INSERT INTO budgets(category, amount_cents, status, updated_at) VALUES(?,?,'active',?)"
-                " ON CONFLICT(category) DO UPDATE SET amount_cents=excluded.amount_cents, status='active',"
+                " ON CONFLICT(category) DO UPDATE SET amount_cents=excluded.amount_cents, proposed_cents=NULL, basis=NULL, status='active',"
                 " updated_at=excluded.updated_at",
                 (category, amount_cents, now_iso()),
             )
@@ -204,6 +212,9 @@ def budget_status(conn, today: date, month: str | None = None) -> dict:
     biggest = {r[0]: r[1] for r in conn.execute(
         f"SELECT {CAT_SQL}, MAX(t.amount_cents) {FROM_SQL} WHERE {SPEND_SQL} AND t.date BETWEEN ? AND ? GROUP BY 1",
         (start.isoformat(), end.isoformat()))}
+    from .connections import scope_key
+    from .store import get_meta
+    proposals_current = get_meta(conn, "budget_proposal_scope") == scope_key(conn, "spending")
     rows = conn.execute("SELECT * FROM budgets ORDER BY category").fetchall()
     budgets, proposed = [], []
     for r in rows:
@@ -220,7 +231,7 @@ def budget_status(conn, today: date, month: str | None = None) -> dict:
                 "projected_cents": projected,
                 "status": "over" if s > r["amount_cents"] else "warn" if projected > r["amount_cents"] else "ok",
             })
-        elif r["proposed_cents"]:
+        if r["proposed_cents"] and proposals_current and (r["status"] != "active" or r["proposed_cents"] != r["amount_cents"]):
             proposed.append({
                 "category": cat, "label": label(cat), "proposed_cents": r["proposed_cents"],
                 "basis": r["basis"], "spent_cents": spent.get(cat, 0),
@@ -308,7 +319,7 @@ def recurring(conn, today: date) -> list[dict]:
 
 def accounts(conn) -> list[dict]:
     rows = conn.execute(
-        "SELECT a.*, i.institution, i.status AS item_status, i.last_sync FROM accounts a"
+        "SELECT a.*, i.institution, i.status AS item_status, i.last_sync FROM active_accounts a"
         " LEFT JOIN items i ON i.item_id = a.item_id ORDER BY a.type, a.name"
     ).fetchall()
     return [dict(r) for r in rows]
@@ -320,12 +331,11 @@ def overview(conn, today: date) -> dict:
     prev_start, prev_end = month_range(shift_month(month, -1))
     same_day_prev = min(prev_end, prev_start + timedelta(days=today.day - 1))
     accts = accounts(conn)
-    cash = sum(a["current_cents"] or 0 for a in accts if a["type"] == "depository")
-    owed = sum(a["current_cents"] or 0 for a in accts if a["type"] == "credit")
     bills = [r for r in recurring(conn, today) if r["next_date"] <= (today + timedelta(days=14)).isoformat()]
     status = budget_status(conn, today)
-    open_alerts = conn.execute("SELECT COUNT(*) FROM alerts WHERE dismissed_at IS NULL").fetchone()[0]
-    last_sync = conn.execute("SELECT MAX(last_sync) FROM items").fetchone()[0]
+    from . import alerts
+    open_alerts = len(alerts.listing(conn, limit=10000))
+    last_sync = conn.execute("SELECT MAX(last_sync) FROM active_items").fetchone()[0]
     from . import wealth
 
     nw = wealth.networth(conn, today, days=31)
@@ -341,8 +351,8 @@ def overview(conn, today: date) -> dict:
         "spent_cents": total_spend(conn, start, end),
         "spent_same_point_last_month_cents": total_spend(conn, prev_start, same_day_prev),
         "income_cents": total_income(conn, start, end),
-        "cash_cents": cash,
-        "credit_owed_cents": owed,
+        "cash_cents": nw["cash_cents"],
+        "credit_owed_cents": nw["credit_cents"],
         "budget": {k: status[k] for k in ("total_budget_cents", "total_spent_cents", "budgets", "proposed")},
         "top_categories": spending_by_category(conn, start, end)[:6],
         "upcoming_bills": bills,
@@ -354,7 +364,11 @@ def overview(conn, today: date) -> dict:
 
 
 def find_transactions(conn, *, query=None, category=None, merchant=None, start=None, end=None,
-                      min_cents=None, ids=None, limit=50) -> list[dict]:
+                      min_cents=None, ids=None, account_id=None, limit=50) -> list[dict]:
+    start = date.fromisoformat(str(start)) if start else None
+    end = date.fromisoformat(str(end)) if end else None
+    if start and end and start > end:
+        raise ValueError("The start date must be on or before the end date.")
     sql = (
         f"SELECT t.*, {CAT_SQL} AS cat, a.name AS account, a.mask {FROM_SQL} WHERE 1=1"
     )
@@ -362,12 +376,15 @@ def find_transactions(conn, *, query=None, category=None, merchant=None, start=N
     if ids:
         sql += f" AND t.id IN ({','.join('?' * len(ids))})"
         args += list(ids)
+    if account_id:
+        sql += " AND t.account_id = ?"
+        args.append(account_id)
     if query:
-        sql += " AND (t.name LIKE ? OR t.merchant LIKE ?)"
-        args += [f"%{query}%"] * 2
+        sql += " AND (instr(LOWER(t.name), LOWER(?)) > 0 OR instr(LOWER(t.merchant), LOWER(?)) > 0)"
+        args += [query] * 2
     if merchant:
-        sql += " AND COALESCE(t.merchant, t.name) LIKE ?"
-        args.append(f"%{merchant}%")
+        sql += " AND instr(LOWER(COALESCE(t.merchant, t.name)), LOWER(?)) > 0"
+        args.append(merchant)
     if category:
         sql += f" AND {CAT_SQL} = ?"
         args.append(category)

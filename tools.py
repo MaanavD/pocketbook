@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from . import alerts, imports, insights, purchases, service, wealth
+from . import alerts, imports, insights, purchases, service, wealth, connections
 from .plaid import PlaidError
-from .store import cents, connect, dollars, require_no_demo, today
+from .store import cents, dollars, require_no_demo, today
+from .service import connect
 
 _cron_check = lambda: None  # replaced in register(): returns a CronExecution inside scheduled runs
 
@@ -159,24 +160,38 @@ def accounts(args):
     action = args.get("action", "list")
     if action == "sync":
         return _ok(**service.sync(conn, force=True))
-    if action in ("connect", "finish", "test_bank", "disconnect"):
+    if action not in ("list", "sync"):
         blocked = _no_cron(f"accounts {action}")
         if blocked:
             return blocked
     p = service.plaid()
-    if action == "connect":
-        link = p.start_link(conn)
+    if action in ("connect", "repair"):
+        link = p.start_link(conn, item_id=args["item_id"]) if action == "repair" else p.start_link(conn)
         return _ok(**link, next="Send the user this link. When they finish, call money_accounts with action=finish.")
     if action == "finish":
         added = p.finish_link(conn)
-        return _ok(added=added, sync=service.sync(conn, force=True))
+        return _ok(added=added, warnings=getattr(p, "link_warnings", []), sync=service.sync(conn, force=True))
     if action == "test_bank":
         added = p.sandbox_link(conn)
         return _ok(added=added, sync=service.sync(conn, force=True))
     if action == "disconnect":
         p.remove_item(conn, args["item_id"])
         return _ok(disconnected=args["item_id"])
-    items = [dict(r) for r in conn.execute("SELECT item_id, institution, status, error, last_sync FROM items")]
+    if action == "cancel_link":
+        return _ok(**p.cancel_link(conn))
+    if action == "set_bank":
+        if not isinstance(args.get("enabled"), bool):
+            raise ValueError("enabled must be true or false")
+        connections.set_bank(conn, args["item_id"], args["enabled"])
+    elif action == "set_account":
+        for key in ("include_spending", "include_networth"):
+            if key in args and not isinstance(args[key], bool):
+                raise ValueError(f"{key} must be true or false")
+        connections.set_account(conn, args["account_id"], name=args.get("name"),
+                                include_spending=args.get("include_spending"), include_networth=args.get("include_networth"))
+    elif action != "list":
+        raise ValueError("Unknown account action")
+    items = connections.catalog(conn, p.env)
     return _ok(connections=items, accounts=[
         {k: a[k] for k in ("account_id", "item_id", "name", "mask", "type", "subtype", "current_cents",
                            "available_cents", "limit_cents", "institution", "last_sync")}
@@ -343,9 +358,13 @@ TOOLS = [
     ("money_accounts", accounts, "🏦",
      "Bank connections through the user's own Plaid keys. list: accounts and balances. sync: pull new transactions now. "
      "connect: get a Plaid sign-in link for the user to open. finish: complete it after they sign in. "
-     "test_bank: add a Plaid sandbox bank (sandbox keys only). disconnect: remove a connection and its data.",
-     {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect"]},
-      "item_id": {"type": "string"}}),
+     "test_bank: add a Plaid sandbox bank (sandbox keys only). repair: fix an existing bank sign-in without duplicating it. "
+     "set_bank: set item_id and enabled to include or exclude a bank, keeping history. set_account: rename or choose "
+     "include_spending/include_networth for account_id. cancel_link: cancel pending sign-in. "
+     "disconnect: permanently remove a connection and its data; prefer set_bank for hiding a bank.",
+     {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect", "repair", "set_bank", "set_account", "cancel_link"]},
+      "item_id": {"type": "string"}, "enabled": {"type": "boolean"}, "account_id": {"type": "string"},
+      "name": {"type": "string"}, "include_spending": {"type": "boolean"}, "include_networth": {"type": "boolean"}}),
     ("money_networth", networth, "🏛️",
      "Net worth now and over time: assets (cash, investments) minus liabilities (cards, loans), change over 30 days "
      "and year to date, and every account's balance.",

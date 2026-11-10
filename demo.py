@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from . import purchases, wealth
 from .plaid import save_sync
 from .store import _lock, get_meta, now_iso, set_meta
+from .connections import scope_key
 
 ACCOUNTS = [
     {"account_id": "demo-checking", "name": "Everyday Checking", "mask": "4021", "type": "depository",
@@ -208,8 +209,8 @@ def _networth_history(conn, today: date) -> None:
             credit = end["credit_cents"] + (rng.randint(-40000, 40000) if i else 0)
             conn.execute(
                 "INSERT OR REPLACE INTO networth(date, assets_cents, liabilities_cents, cash_cents, investments_cents,"
-                " credit_cents, loans_cents) VALUES(?,?,?,?,?,?,?)",
-                (d.isoformat(), int(market) + cash, loans + credit, cash, int(market), credit, loans))
+                " credit_cents, loans_cents, scope) VALUES(?,?,?,?,?,?,?,?)",
+                (d.isoformat(), int(market) + cash, loans + credit, cash, int(market), credit, loans, scope_key(conn)))
 
 
 def charge(conn, merchant: str, amount: float, category: str, today: date) -> dict:
