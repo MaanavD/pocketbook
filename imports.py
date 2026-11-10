@@ -53,7 +53,7 @@ CREDIT_HINT = re.compile(r"card|visa|amex|american express|mastercard|discover|c
 
 
 def _norm(h: str) -> str:
-    return re.sub(r"\s+", " ", (h or "").replace("﻿", "").strip().lower())
+    return re.sub(r"\s+", " ", (h or "").replace("\ufeff", "").strip().lower())
 
 
 def _pick(headers: dict[str, str], names) -> str | None:
@@ -104,7 +104,7 @@ def detect(header: list[str]) -> str:
 
 
 def read(text: str) -> tuple[str, list[dict], dict[str, str]]:
-    rows = list(csv.reader(io.StringIO(text.lstrip("﻿"))))
+    rows = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
     if not rows:
         raise ValueError("The file is empty.")
     header = rows[0]
