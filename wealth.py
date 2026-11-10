@@ -120,7 +120,7 @@ TYPE_LABELS = {"equity": "Stocks", "etf": "ETFs", "mutual fund": "Mutual funds",
                "cash": "Cash", "cryptocurrency": "Crypto", "derivative": "Options", "loan": "Loans", "other": "Other"}
 
 
-def save_holdings(conn, holdings: list[dict], securities: list[dict]) -> None:
+def save_holdings(conn, holdings: list[dict], securities: list[dict], account_ids=None) -> None:
     from .store import cents
 
     stamp = now_iso()
@@ -131,7 +131,7 @@ def save_holdings(conn, holdings: list[dict], securities: list[dict]) -> None:
                 " VALUES(?,?,?,?,?,?)",
                 (s["security_id"], s.get("name"), s.get("ticker_symbol"), s.get("type"),
                  None if s.get("close_price") is None else cents(s["close_price"]), s.get("close_price_as_of")))
-        for acct in {h["account_id"] for h in holdings}:
+        for acct in {h["account_id"] for h in holdings} | set(account_ids or []):
             conn.execute("DELETE FROM holdings WHERE account_id = ?", (acct,))
         for h in holdings:
             value = h.get("institution_value")

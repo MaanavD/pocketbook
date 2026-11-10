@@ -36,6 +36,12 @@ Use a separate Hermes profile for sandbox testing and production accounts. Sandb
 
 To try it without a bank: `hermes pocketbook demo` loads six months of sample data, clearly labeled. Run `hermes pocketbook demo --clear` before you connect a real bank. `hermes pocketbook charge "Delta Air Lines" 640 --category travel` adds a sample charge so you can watch an alert fire.
 
+## Refreshing data
+
+Use **Refresh all** in Finance (or `hermes pocketbook sync`) to bypass the sync interval, fetch all connected account balances including loans, pull transaction changes, update investment holdings, and recompute net worth. The Finance refresh also checks alerts and reloads its views. Failures and unavailable holdings appear in the refresh result; a zero transaction count does not mean every account refreshed successfully.
+
+This retrieves the latest data Plaid already has. It does not force a real-time bank fetch, and banks may take time to provide updates ([Plaid balance freshness](https://plaid.com/docs/api/accounts/)). Sandbox accounts and loans remain simulated after a refresh; refreshing does not remove them or convert them into production accounts. Budget approvals, categories and other user settings are preserved.
+
 ## Commands
 
 | Command | Does |
@@ -43,7 +49,7 @@ To try it without a bank: `hermes pocketbook demo` loads six months of sample da
 | `hermes pocketbook status` | Accounts, sync state, this month |
 | `hermes pocketbook connect` | Link a bank through Plaid Hosted Link |
 | `hermes pocketbook test-bank` | Add Plaid's sandbox bank (sandbox keys) |
-| `hermes pocketbook sync` | Pull new transactions now |
+| `hermes pocketbook sync` | Refresh all connected accounts, transactions and investment holdings |
 | `hermes pocketbook check` | Run the alert check |
 | `hermes pocketbook import FILE` | Import a CSV (other apps, a bank, or Amazon orders) |
 | `hermes pocketbook demo [--clear]` | Load or remove sample data |

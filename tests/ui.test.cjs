@@ -3,7 +3,7 @@ const test = require('node:test')
 const fs = require('node:fs')
 const vm = require('node:vm')
 
-function renderHarness (initial = []) {
+function renderHarness (initial = [], api = () => {}) {
   let cursor = 0
   const state = [...initial]
   const React = {
@@ -17,7 +17,7 @@ function renderHarness (initial = []) {
     useCallback: fn => fn,
     useMemo: fn => fn()
   }
-  const context = vm.createContext({ React, api: () => {}, openUrl: () => {}, onRefreshEvent: () => {} })
+  const context = vm.createContext({ React, api, openUrl: () => {}, onRefreshEvent: () => {} })
   vm.runInContext(fs.readFileSync('ui/app.js', 'utf8') + '\nglobalThis.components = { FinanceApp, Setup, LineChart }', context)
   return { components: context.components, render: (fn, props) => { cursor = 0; return fn(props) } }
 }
@@ -66,4 +66,24 @@ test('negative spending series stay inside the chart plot', () => {
       assert.ok(y >= 9.9 && y <= 194.1, `path y=${y} must stay inside the plot`)
     }
   }
+})
+
+
+test('refresh all reports partial failures instead of claiming success', async () => {
+  const calls = []
+  const h = renderHarness([data, null, false, null, null, 'overview'], async (path, opts) => {
+    calls.push(path)
+    if (path === '/summary') return data
+    return { items: 1, added: 0, modified: 0, removed: 0,
+      errors: ['Test bank: balance unavailable'], notes: ['Holdings unavailable'], environment: 'sandbox' }
+  })
+  const page = h.render(h.components.FinanceApp)
+  const refresh = nodes(page).find(n => text(n) === 'Refresh all' && typeof n.props.onClick === 'function')
+  assert.ok(refresh, 'Refresh all must be available for connected banks')
+  await refresh.props.onClick()
+  const output = text(h.render(h.components.FinanceApp))
+  assert.ok(calls.includes('/sync'))
+  assert.match(output, /balance unavailable/)
+  assert.match(output, /Holdings unavailable/)
+  assert.match(output, /sandbox|simulated/i)
 })

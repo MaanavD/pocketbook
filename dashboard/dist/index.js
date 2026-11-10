@@ -915,7 +915,12 @@ function FinanceApp () {
       } else if (what === 'clear-demo') {
         await post('/demo', { action: 'clear' })
       } else if (what === 'sync') {
-        const r = await post('/sync'); setNotice([r.skipped ? `Sync skipped: ${r.skipped}.` : `Synced: ${r.added} new, ${r.modified} updated.`])
+        const r = await post('/sync')
+        const problems = [...(r.errors || []), ...(r.notes || [])]
+        setNotice([r.skipped ? `Refresh skipped: ${r.skipped}.` :
+          `Refreshed ${r.items} bank connections and ${r.accounts || 0} accounts: ${r.added} new transactions, ${r.modified} updated, ${r.removed} removed. ` +
+          'Balances and holdings use the latest data available from Plaid; bank updates may arrive later. ' +
+          (r.environment === 'sandbox' ? 'Plaid sandbox accounts contain simulated data. ' : '') + problems.join(' '), problems.length > 0])
       } else if (what === 'propose') {
         await post('/budgets/propose')
       } else if (what === 'approve') {
@@ -957,11 +962,12 @@ function FinanceApp () {
       h('div', null,
         h('h1', { className: 'pb-title' }, 'Finance'),
         h('div', { className: 'pb-sub' }, empty ? 'No accounts connected' : `${o.accounts} accounts · synced ${ago(o.last_sync)}`,
-          o.demo && h(Chip, { tone: 'accent' }, 'Sample data'))),
+          o.demo && h(Chip, { tone: 'accent' }, 'Sample data'),
+          data.setup.live_items && data.setup.plaid_env === 'sandbox' && h(Chip, { tone: 'accent' }, 'Plaid sandbox · test data'))),
       !empty && h('div', { className: 'pb-flex' },
         o.demo && h(Btn, { ghost: true, disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
         !o.demo && h(Btn, { disabled: busy, onClick: () => setManageBanks(!manageBanks) }, manageBanks ? 'Close bank setup' : 'Manage banks'),
-        h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Working…' : 'Sync now'))),
+        h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Refreshing…' : 'Refresh all'))),
     notice && h('div', { className: `pb-notice${notice[1] ? ' err' : ''}` }, h('span', null, notice[0]), h(Btn, { small: true, ghost: true, onClick: () => setNotice(null) }, '✕')),
     (empty || !data.setup.live_items || manageBanks) && !o.demo && h(Setup, { setup: data.setup, act, busy }),
     !empty && h('nav', { className: 'pb-nav', role: 'tablist' },
