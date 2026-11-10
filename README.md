@@ -23,10 +23,16 @@ All math runs in code. The model explains results; it never computes totals.
 ## Setup
 
 1. Install and enable: `hermes plugins install https://github.com/MaanavD/pocketbook` then `hermes plugins enable pocketbook`.
-2. Get Plaid keys at [dashboard.plaid.com](https://dashboard.plaid.com) (Developers → Keys). Sandbox keys work right away; production needs Plaid's free Trial plan.
-3. Paste the client ID and secret in **Settings → Plugins → pocketbook** and pick `sandbox` or `production`.
-4. Connect a bank from the Finance tab, by asking Hermes, or with `hermes pocketbook connect`. Plaid hosts the sign-in page, so no server or webhook is needed.
+2. For **real bank accounts**, request [Production access in the Plaid Dashboard](https://dashboard.plaid.com/overview/production) and complete Plaid's required approval steps. Creating a Plaid account or obtaining Sandbox keys does **not** enable real banks. A [Trial plan](https://plaid.com/docs/account/billing/) may provide production access for supported products; availability and limits depend on your Plaid account.
+3. Once access is enabled, get your client ID and **Production secret** from [Developers → Keys](https://dashboard.plaid.com/developers/keys). In **Settings → Plugins → pocketbook**, enter those credentials and select **`production`**. Configure the Hermes profile and gateway you use for Finance; for an SSH setup, this is the remote backend.
+4. Remove Pocketbook's sample data if loaded, then choose **Connect a bank** in Finance (open **Manage banks** if accounts are already connected), or run `hermes pocketbook connect`. Start a fresh connection after changing environments. Complete the Plaid-hosted sign-in, then choose **Finish connecting**.
 5. For alerts, schedule the **Money alerts** blueprint (every two hours, 8am to 10pm) and, if you like, the **Weekly money digest** from `/blueprint` or the Cron page. Alerts need the gateway running.
+
+### Sandbox versus real banks
+
+`sandbox` is the default and only uses simulated accounts. Even **Connect a bank** opens a test flow in this environment. **First Platypus Bank** is a Plaid test institution, not your real bank; do not enter real bank credentials there. **Add Plaid test bank** and `hermes pocketbook test-bank` are also sandbox-only.
+
+Use a separate Hermes profile for sandbox testing and production accounts. Sandbox connections and tokens do not work in Production, and changing the environment does not convert test accounts into real ones. See [Plaid's environment documentation](https://plaid.com/docs/sandbox/) for access requirements and test-bank behavior.
 
 To try it without a bank: `hermes pocketbook demo` loads six months of sample data, clearly labeled. Run `hermes pocketbook demo --clear` before you connect a real bank. `hermes pocketbook charge "Delta Air Lines" 640 --category travel` adds a sample charge so you can watch an alert fire.
 
@@ -57,7 +63,7 @@ To try it without a bank: `hermes pocketbook demo` loads six months of sample da
 
 ## Limits
 
-US banks and USD only. Holdings come from Plaid Investments, which some institutions do not support; their balances still count toward net worth. Net worth history starts at your first sync. One person per Hermes profile. Plaid's Trial plan allows ten production connections in total. Bills are detected from history (three or more charges on a steady cadence), so a new bill appears after its third charge. Amazon orders match a charge only when the totals agree, so orders split across shipments may stay unmatched; their items still count. Importing a CSV that overlaps a connected bank duplicates those charges, so remove one with `money_import remove=...`. Import column names come from public descriptions of each app's export, so a format change can need a fix.
+US banks and USD only. Holdings come from Plaid Investments, which some institutions do not support; their balances still count toward net worth. Net worth history starts at your first sync. One person per Hermes profile. Plaid access and connection limits depend on your plan and approved products. Bills are detected from history (three or more charges on a steady cadence), so a new bill appears after its third charge. Amazon orders match a charge only when the totals agree, so orders split across shipments may stay unmatched; their items still count. Importing a CSV that overlaps a connected bank duplicates those charges, so remove one with `money_import remove=...`. Import column names come from public descriptions of each app's export, so a format change can need a fix.
 
 ## Development
 
