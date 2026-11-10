@@ -143,3 +143,22 @@ test('connection success keeps failed banks and refresh errors visible', () => {
   assert.match(message, /Balances unavailable/)
   assert.match(message, /Holdings unavailable/)
 })
+
+
+test('recalculate uses saved data and exposes updated budget recommendations', async () => {
+  const calls = []
+  const harness = renderHarness([data, null, false, null, null, 'overview'], async path => {
+    calls.push(path)
+    if (path === '/summary') return data
+    if (path === '/recalculate') return { accounts: 2, budget_recommendations: 3, note: 'Approved amounts stay unchanged.' }
+    throw Error('Unexpected API call')
+  })
+  const page = harness.render(harness.components.FinanceApp)
+  const recalculate = nodes(page).find(n => text(n) === 'Recalculate' && n.props.onClick)
+  assert.ok(recalculate)
+  await recalculate.props.onClick()
+  const output = text(harness.render(harness.components.FinanceApp))
+  assert.deepEqual(calls, ['/recalculate', '/summary'])
+  assert.match(output, /3 budget recommendations/)
+  assert.match(output, /Approved amounts stay unchanged/)
+})

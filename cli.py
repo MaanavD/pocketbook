@@ -19,6 +19,7 @@ def setup(parser) -> None:
     subs.add_parser("connect", help="Link a bank through Plaid Hosted Link")
     subs.add_parser("test-bank", help="Add a Plaid sandbox bank (sandbox keys only)")
     subs.add_parser("sync", help="Pull new transactions now")
+    subs.add_parser("recalculate", help="Recalculate recommendations from saved data without contacting banks")
     subs.add_parser("check", help="Run the alert check and print new alerts")
     d = subs.add_parser("demo", help="Load six months of sample data (or --clear it)")
     d.add_argument("--clear", action="store_true")
@@ -50,6 +51,8 @@ def _run(args) -> None:
             state = "excluded in this environment" if not r["environment_match"] else "off" if not r["enabled"] else r["status"]
             print(f"  {r['institution']}: {state}, {r['environment'] or 'imported/sample'}, "
                   f"last sync {r['last_sync'] or 'never'}")
+    elif cmd == "recalculate":
+        print(json.dumps(service.recalculate(conn), indent=2))
     elif cmd == "cancel-link":
         print(service.plaid().cancel_link(conn)["message"])
     elif cmd == "connect":

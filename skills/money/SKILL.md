@@ -71,3 +71,8 @@ Use `money_accounts action=list` to see all connections with environment and ena
 Sandbox accounts are simulated and excluded while Production is selected. Never present their loans or balances as real, and never send a Sandbox token to Production. To fix a broken sign-in, use `repair` with the existing `item_id`, send its link, then `finish` after the user signs in. Do not create another connection for the same bank as a repair. `cancel_link` clears Pocketbook's pending sign-in; ask the user to close its Plaid browser tab too. `LINK_PENDING` means the user or Plaid has not finished yet, not a broken account. Never enter bank credentials for the user.
 
 Account selection also changes the budget proposal basis. Generate fresh proposals after a selection change. Manual budget amounts remain in place.
+
+
+## Recalculating after data changes
+
+Successful bank syncs regenerate recommendations using all included accounts, including newly connected banks. Approved budget amounts remain unchanged. Use `money_accounts action=recalculate` to rebuild recommendations, alert conditions and net-worth snapshots from saved data without calling Plaid. Other totals and goal progress are calculated when read. Use `action=sync` to also retrieve bank updates. Recommendations use the last three complete months, so a bank still loading history may need another sync later. Show changed recommendations for approval before applying them.

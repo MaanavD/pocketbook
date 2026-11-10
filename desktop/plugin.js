@@ -922,7 +922,8 @@ function errorText (error) {
 function linkNotice (result) {
   const problems = [...(result.warnings || []), ...((result.sync || {}).errors || []), ...((result.sync || {}).notes || [])]
   const names = (result.added || []).map(bank => bank.institution).join(', ')
-  return [`Bank sign-in complete: ${names}.` + (problems.length ? ` ${problems.join(' ')}` : ''), problems.length > 0]
+  const recalculated = (result.sync || {}).recalculated
+  return [`Bank sign-in complete: ${names}.` + (recalculated ? ` ${recalculated.budget_recommendations} budget recommendations ready to review in Budget.` : '') + (problems.length ? ` ${problems.join(' ')}` : ''), problems.length > 0]
 }
 
 function AccountControls ({ account: a, disabled, post, busy }) {
@@ -1040,7 +1041,11 @@ function FinanceApp () {
         setNotice([r.skipped ? `Refresh skipped: ${r.skipped}.` :
           `Refreshed ${r.items} bank connections and ${r.accounts || 0} accounts: ${r.added} new transactions, ${r.modified} updated, ${r.removed} removed. ` +
           'Balances and holdings use the latest data available from Plaid; bank updates may arrive later. ' +
-          (r.environment === 'sandbox' ? 'Plaid sandbox accounts contain simulated data. ' : '') + problems.join(' ') + (skipped ? ` ${skipped}` : ''), problems.length > 0])
+          (r.environment === 'sandbox' ? 'Plaid sandbox accounts contain simulated data. ' : '') +
+          (r.recalculated ? `${r.recalculated.budget_recommendations} budget recommendations ready to review in Budget. ` : '') + problems.join(' ') + (skipped ? ` ${skipped}` : ''), problems.length > 0])
+      } else if (what === 'recalculate') {
+        const r = await post('/recalculate')
+        setNotice([`Recalculated from saved data for ${r.accounts} accounts. ${r.budget_recommendations} budget recommendations ready to review in Budget. ${r.note}`])
       } else if (what === 'propose') {
         await post('/budgets/propose')
       } else if (what === 'approve') {
@@ -1121,6 +1126,7 @@ function FinanceApp () {
       (!empty || hasStoredAccounts) && h('div', { className: 'pb-flex pb-wrap' },
         o.demo && h(Btn, { ghost: true, disabled: busy, onClick: () => act('clear-demo') }, 'Remove sample data'),
         !o.demo && h(Btn, { disabled: busy, onClick: () => { setManageBanks(!manageBanks); setTab(manageBanks ? 'overview' : 'accounts') } }, manageBanks ? 'Close bank setup' : 'Manage banks'),
+        h(Btn, { disabled: busy, onClick: () => act('recalculate') }, 'Recalculate'),
         h(Btn, { disabled: busy, onClick: () => act('sync') }, busy ? 'Refreshing…' : 'Refresh all'))),
     error && h('div', { className: 'pb-notice err', role: 'alert' }, h('span', null, `Could not refresh Finance. Showing the last loaded data. ${errorText(error)}`), h(Btn, { small: true, onClick: load }, 'Retry')),
     notice && h('div', { className: `pb-notice${notice[1] ? ' err' : ''}` }, h('span', null, notice[0]), h(Btn, { small: true, ghost: true, onClick: () => setNotice(null) }, '✕')),

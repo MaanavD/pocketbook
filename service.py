@@ -53,8 +53,26 @@ def sync(conn=None, force: bool = False) -> dict:
         if age < timedelta(minutes=int(s.get("sync_minutes") or 30)):
             return {"skipped": f"synced {int(age.total_seconds() // 60)} min ago"}
     result = plaid(s).sync(conn, full=force)
+    if result.get("items", 0):
+        try:
+            result["recalculated"] = recalculate(conn)
+        except (ValueError, KeyError, TypeError) as exc:
+            result.setdefault("notes", []).append(f"Bank data refreshed, but recalculation did not finish: {exc}")
     _notify_ui("synced", result)
     return result
+
+
+def recalculate(conn=None) -> dict:
+    """Rebuild derived recommendations from saved data without calling Plaid or changing approved budgets."""
+    from . import wealth
+    conn = conn or connect()
+    t = today()
+    insights.propose_budgets(conn, t)
+    wealth.snapshot(conn, t)
+    new_alerts = alerts.record(conn, alerts.detect(conn, t, settings()))
+    return {"budget_recommendations": len(insights.budget_status(conn, t)["proposed"]),
+            "new_alerts": len(new_alerts), "accounts": len(insights.accounts(conn)),
+            "note": "Recommendations use the last three complete months. Approved budget amounts stay unchanged until you approve or edit them."}
 
 
 def check(conn=None, now: datetime | None = None) -> dict:

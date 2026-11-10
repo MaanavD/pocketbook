@@ -407,3 +407,58 @@ def test_cli_can_clear_a_stuck_signin(monkeypatch,capsys):
     assert c.execute('SELECT COUNT(*) FROM items').fetchone()[0] == 1
     assert 'Close the Plaid browser tab' in capsys.readouterr().out
     assert p.calls == []
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_new_bank_sync_recalculates_recommendations_without_changing_approved_budget(monkeypatch,force):
+    from pocketbook import service
+    from pocketbook.plaid import save_sync
+    c,p=linked({})
+    save_sync(c,'i1',ACCT,[tx(str(m),f'2026-{m:02d}-10',100,'Cafe') for m in (8,9,10)],[],[],'old')
+    insights.set_budget(c,'FOOD_AND_DRINK',7500)
+    def synced(conn,full=False):
+        assert full is force
+        conn.execute("INSERT INTO items(item_id,institution,token_env) VALUES('i2','New bank','TOKEN_i2')")
+        second=[{'account_id':'a2','name':'New card','type':'credit','balances':{'current':50}}]
+        more=[{**tx(f'new{m}',f'2026-{m:02d}-10',200,'Cafe'), 'account_id':'a2'} for m in (8,9,10)]
+        save_sync(conn,'i2',second,more,[],[],'new')
+        return {'items':2,'errors':[]}
+    monkeypatch.setattr(p,'sync',synced)
+    monkeypatch.setattr(service,'plaid',lambda *args:p)
+    monkeypatch.setattr(service,'settings',lambda:{})
+    monkeypatch.setattr(service,'today',lambda:TODAY)
+    monkeypatch.setattr(service,'_notify_ui',lambda *args:None)
+    result=service.sync(c,force=force)
+    status=insights.budget_status(c,TODAY)
+    assert status['budgets'][0]['budget_cents'] == 7500
+    assert status['proposed'][0]['proposed_cents'] == 30000
+    assert result['recalculated']['budget_recommendations'] == 1
+
+
+def test_recalculate_uses_saved_data_and_respects_excluded_banks(monkeypatch):
+    from pocketbook import service, connections
+    from pocketbook.plaid import save_sync
+    c,_=linked({})
+    save_sync(c,'i1',ACCT,[tx(str(m),f'2026-{m:02d}-10',100,'Cafe') for m in (8,9,10)],[],[],'old')
+    monkeypatch.setattr(service,'today',lambda:TODAY)
+    monkeypatch.setattr(service,'settings',lambda:{})
+    monkeypatch.setattr(service,'plaid',lambda *args:pytest.fail('Recalculate must not contact Plaid'))
+    assert service.recalculate(c)['budget_recommendations'] == 1
+    connections.set_bank(c,'i1',False)
+    assert service.recalculate(c)['budget_recommendations'] == 0
+    assert insights.budget_status(c,TODAY)['proposed'] == []
+    assert c.execute('SELECT COUNT(*) FROM transactions').fetchone()[0] == 3
+
+
+def test_partial_recalculation_failure_does_not_hide_successful_bank_refresh(monkeypatch):
+    from pocketbook import service
+    c,p=linked({})
+    monkeypatch.setattr(p,'sync',lambda *args,**kwargs:{'items':1,'errors':[]})
+    monkeypatch.setattr(service,'plaid',lambda *args:p)
+    monkeypatch.setattr(service,'settings',lambda:{})
+    monkeypatch.setattr(service,'_notify_ui',lambda *args:None)
+    def fail(conn):raise ValueError('Synthetic calculation failure')
+    monkeypatch.setattr(service,'recalculate',fail)
+    result=service.sync(c,force=True)
+    assert result['items'] == 1
+    assert 'Synthetic calculation failure' in result['notes'][0]

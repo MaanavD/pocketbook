@@ -46,6 +46,12 @@ Use **Refresh all** in Finance (or `hermes pocketbook sync`) to bypass the sync 
 
 This retrieves the latest data Plaid already has. It does not force a real-time bank fetch, and banks may take time to provide updates ([Plaid balance freshness](https://plaid.com/docs/api/accounts/)). Sandbox accounts and loans remain simulated after a refresh; refreshing does not remove them or convert them into production accounts. Budget approvals, categories and other user settings are preserved.
 
+### Recalculating after account changes
+
+Successful bank syncs, including the sync after adding or repairing a bank, rebuild budget recommendations, alert conditions and the current net-worth snapshot. Finance then reads spending, cash flow, recurring bills, investments and goal progress from the updated saved data. Approved budget amounts stay unchanged until you approve a recommendation or edit a budget.
+
+Use **Recalculate** in Finance, `hermes pocketbook recalculate`, or `money_accounts action=recalculate` to rebuild these results from saved data without contacting banks. Use **Refresh all** when you also want new bank data. Both paths respect bank/account exclusions. Recommendations use the last three complete months; if Plaid is still fetching a new bank's history, refresh again after that history arrives.
+
 ## Choosing banks and accounts
 
 Open **Finance → Accounts** or **Manage banks**. Each bank has an on/off switch. Off stops refresh and excludes its accounts from spending, cash flow, budgets, alerts, investments and net worth. History stays stored, and turning the bank back on restores it. Each account also has a nickname and separate **Spending & budgets** and **Net worth** switches. Preferences survive refreshes. Closed accounts keep their transaction history but no longer contribute a stale balance.
@@ -64,7 +70,8 @@ The Budget tab lets you add, edit and remove monthly category budgets as well as
 | `hermes pocketbook connect` | Link a bank through Plaid Hosted Link |
 | `hermes pocketbook cancel-link` | Clear a pending sign-in; also close its Plaid browser tab |
 | `hermes pocketbook test-bank` | Add Plaid's sandbox bank (sandbox keys) |
-| `hermes pocketbook sync` | Refresh all connected accounts, transactions and investment holdings |
+| `hermes pocketbook sync` | Refresh connected accounts, transactions, holdings and recommendations |
+| `hermes pocketbook recalculate` | Rebuild recommendations and alerts from saved data, without bank requests |
 | `hermes pocketbook check` | Run the alert check |
 | `hermes pocketbook import FILE` | Import a CSV (other apps, a bank, or Amazon orders) |
 | `hermes pocketbook demo [--clear]` | Load or remove sample data |

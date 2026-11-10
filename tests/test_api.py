@@ -92,3 +92,19 @@ def test_connected_response_keeps_partial_connection_and_sync_failures_visible(c
     assert response.json()['status'] == 'connected'
     assert response.json()['warnings'] == ['Another bank did not finish connecting.']
     assert response.json()['sync']['errors'] == ['Balance refresh unavailable']
+
+
+def test_recalculate_endpoint_works_without_bank_calls_and_preserves_budget(client,monkeypatch):
+    http,c=client
+    c.execute("INSERT INTO items(item_id,institution) VALUES('i','Imported bank')")
+    c.execute("INSERT INTO accounts(account_id,item_id,name,type,current_cents) VALUES('a','i','Card','credit',100)")
+    c.executemany("INSERT INTO transactions(id,account_id,item_id,date,amount_cents,category,name) VALUES(?,?,?,?,?,?,?)",
+                  [(str(m),'a','i',f'2026-{m:02d}-10',10000,'GROCERIES','Grocer') for m in (8,9,10)])
+    c.commit()
+    api.insights.set_budget(c,'GROCERIES',5000)
+    monkeypatch.setattr(api.service,'today',lambda:api.store.date(2026,11,10))
+    monkeypatch.setattr(api.service,'plaid',lambda *args:pytest.fail('Saved-data recalculation must not use Plaid'))
+    response=http.post('/finance/recalculate')
+    assert response.status_code == 200
+    assert response.json()['budget_recommendations'] == 1
+    assert c.execute('SELECT amount_cents,proposed_cents FROM budgets').fetchone()[:] == (5000,10000)

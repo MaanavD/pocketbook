@@ -164,6 +164,8 @@ def accounts(args):
         blocked = _no_cron(f"accounts {action}")
         if blocked:
             return blocked
+    if action == "recalculate":
+        return _ok(**service.recalculate(conn))
     p = service.plaid()
     if action in ("connect", "repair"):
         link = p.start_link(conn, item_id=args["item_id"]) if action == "repair" else p.start_link(conn)
@@ -357,12 +359,13 @@ TOOLS = [
       "merchant": {"type": "string"}}),
     ("money_accounts", accounts, "🏦",
      "Bank connections through the user's own Plaid keys. list: accounts and balances. sync: pull new transactions now. "
+     "recalculate: rebuild recommendations and alerts from saved data without calling Plaid or changing approved budgets. "
      "connect: get a Plaid sign-in link for the user to open. finish: complete it after they sign in. "
      "test_bank: add a Plaid sandbox bank (sandbox keys only). repair: fix an existing bank sign-in without duplicating it. "
      "set_bank: set item_id and enabled to include or exclude a bank, keeping history. set_account: rename or choose "
      "include_spending/include_networth for account_id. cancel_link: cancel pending sign-in. "
      "disconnect: permanently remove a connection and its data; prefer set_bank for hiding a bank.",
-     {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect", "repair", "set_bank", "set_account", "cancel_link"]},
+     {"action": {"type": "string", "enum": ["list", "sync", "connect", "finish", "test_bank", "disconnect", "repair", "set_bank", "set_account", "cancel_link", "recalculate"]},
       "item_id": {"type": "string"}, "enabled": {"type": "boolean"}, "account_id": {"type": "string"},
       "name": {"type": "string"}, "include_spending": {"type": "boolean"}, "include_networth": {"type": "boolean"}}),
     ("money_networth", networth, "🏛️",

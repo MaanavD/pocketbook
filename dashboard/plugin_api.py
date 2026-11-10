@@ -171,6 +171,11 @@ async def sync():
     return await _run(go)
 
 
+@router.post("/recalculate")
+async def recalculate():
+    return await _run(service.recalculate)
+
+
 @router.post("/connect")
 async def connect_bank():
     return await _run(lambda: service.plaid().start_link(service.connect()))
