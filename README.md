@@ -86,6 +86,7 @@ The Budget tab lets you add, edit and remove monthly category budgets as well as
 - **Writes in scheduled runs**: budget, goal and rule changes, recategorizing, imports, dismissing alerts and bank connect/disconnect refuse to run inside cron jobs.
 - **Sample data stays separate**: it loads only into an empty Pocketbook, and you must remove it before you connect a bank or import a file.
 - **Imports**: `money_import` reads only `.csv` files up to 20 MB.
+- **Approval for deletes**: when the model calls `money_accounts action=disconnect` or `money_import remove`, Hermes asks you to approve first.
 - **Disconnecting**: the access token is deleted only after Plaid confirms the removal, so a failed disconnect can be retried.
 - Nothing moves money.
 

@@ -66,7 +66,7 @@ Plain sentences, dollars rounded to the cent only when it matters. No financial 
 
 ## Bank selection and sign-in recovery
 
-Use `money_accounts action=list` to see all connections with environment and enabled state. `set_bank` with `item_id` and boolean `enabled` hides or restores a bank without deleting history. `set_account` with `account_id` sets `name`, `include_spending` or `include_networth`. These are user-requested changes and refuse scheduled execution. Prefer turning a bank off when the user wants it excluded; `disconnect` removes its data.
+Use `money_accounts action=list` to see all connections with environment and enabled state. `set_bank` with `item_id` and boolean `enabled` hides or restores a bank without deleting history. `set_account` with `account_id` sets `name`, `include_spending` or `include_networth`. These are user-requested changes and refuse scheduled execution. Prefer turning a bank off when the user wants it excluded; `disconnect` removes its data. Hermes asks the user to approve `disconnect` and import `remove` before they run.
 
 Sandbox accounts are simulated and excluded while Production is selected. Never present their loans or balances as real, and never send a Sandbox token to Production. To fix a broken sign-in, use `repair` with the existing `item_id`, send its link, then `finish` after the user signs in. Do not create another connection for the same bank as a repair. `cancel_link` clears Pocketbook's pending sign-in; ask the user to close its Plaid browser tab too. `LINK_PENDING` means the user or Plaid has not finished yet, not a broken account. Never enter bank credentials for the user.
 
