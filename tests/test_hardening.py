@@ -398,3 +398,14 @@ def test_full_refresh_preserves_holdings_when_response_is_incomplete():
     result = p.sync(c, full=True)
     assert c.execute("SELECT COUNT(*) FROM holdings").fetchone()[0] == 1
     assert any("BAD_RESPONSE" in note for note in result["notes"])
+
+
+def test_model_deletes_need_human_approval():
+    gate = tools.approval_gate
+    hit = gate(tool_name="money_accounts", args={"action": "disconnect", "item_id": "i1"})
+    assert hit["action"] == "approve" and hit["rule_key"] == "pocketbook:disconnect"
+    assert gate(tool_name="money_import", args={"remove": "file.csv"})["rule_key"] == "pocketbook:remove_import"
+    assert gate(tool_name="money_accounts", args={"action": "list"}) is None
+    assert gate(tool_name="money_import", args={"path": "x.csv"}) is None
+    assert gate(tool_name="terminal", args={"action": "disconnect"}) is None
+    assert gate(tool_name="money_accounts", args=None) is None

@@ -37,6 +37,18 @@ def _no_cron(action: str):
     return None
 
 
+def approval_gate(tool_name: str = "", args=None, **_):
+    """pre_tool_call hook: a person must approve model calls that delete bank history or imports."""
+    args = args if isinstance(args, dict) else {}
+    if tool_name == "money_accounts" and args.get("action") == "disconnect":
+        return {"action": "approve", "rule_key": "pocketbook:disconnect",
+                "message": f"Disconnect bank {args.get('item_id')} at Plaid and delete its local history?"}
+    if tool_name == "money_import" and args.get("remove"):
+        return {"action": "approve", "rule_key": "pocketbook:remove_import",
+                "message": f"Delete imported file {args.get('remove')} and its transactions?"}
+    return None
+
+
 def _safe(fn):
     def handler(args, **kwargs):
         try:

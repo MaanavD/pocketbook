@@ -12,6 +12,7 @@ def register(ctx) -> None:
     from . import cli, tools
 
     tools._cron_check = ctx.current_cron_execution
+    ctx.register_hook("pre_tool_call", tools.approval_gate)
     for name, handler, emoji, description, props in tools.TOOLS:
         ctx.register_tool(name=name, toolset="pocketbook", schema=tools.schema(name, description, props),
                           handler=handler, description=description.split(".")[0], emoji=emoji)

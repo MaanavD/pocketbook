@@ -24,7 +24,8 @@ provides_tools:
   - money_categorize
   - money_import
   - money_purchases
-provides_hooks: []
+provides_hooks:
+  - pre_tool_call
 config_schema:
   plaid_client_id:
     type: secret
